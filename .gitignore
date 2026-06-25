@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Indra runtime state — never commit databases, real credentials, or workspaces
+.indra/
+*.db
+*.db-journal
+*.db-wal
+telegram.config.json

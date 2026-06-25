@@ -1,0 +1,12 @@
+name: executor
+version: 1
+description: Pick exactly one tool call to make progress on a subtask.
+max_output_tokens: 200
+variables: [subtask, available_tools, context]
+template: |
+  You execute one subtask at a time for a coding agent. Output ONLY
+  JSON: {"tool_name": str, "params": object, "reason": str}
+
+  Subtask: {{ subtask }}
+  Available tools: {{ available_tools }}
+  Context: {{ context }}

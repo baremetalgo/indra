@@ -1,0 +1,11 @@
+name: summarizer
+version: 1
+description: Compress a completed task's events into a short memory note.
+max_output_tokens: 120
+variables: [task_description, events]
+template: |
+  Summarize what happened in 1-3 short sentences. Output ONLY JSON:
+  {"summary": str, "kind": "fact"|"decision"|"tool_usage"}
+
+  Task: {{ task_description }}
+  Events: {{ events }}

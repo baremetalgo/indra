@@ -1,0 +1,44 @@
+# Indra configuration.
+# Switch model.backend to "llama_cpp" and set model.model_path once you
+# have a GGUF model downloaded. "mock" lets you exercise the whole
+# agent loop (planning, tool execution, memory) without any model.
+
+model:
+  backend: mock          # mock | llama_cpp | ollama | openai_compat | vllm | lmstudio
+  model_path: ""
+  context_size: 4096
+  max_tokens_per_call: 512
+  gpu_layers: 20
+  temperature: 0.0
+
+memory:
+  max_tokens: 300
+  long_term_retention_days: 90
+
+agent:
+  max_llm_calls_simple: 3
+  max_llm_calls_medium: 8
+  max_llm_calls_complex: 15
+  max_replan_attempts: 1
+  max_tool_retries: 2
+  max_steps: 40
+
+web_search:
+  provider: searxng
+  base_url: "http://localhost:8080"
+  api_key_env: ""
+  max_results: 5
+  fetch_timeout_seconds: 5.0
+  cache_ttl_seconds: 3600
+
+telegram:
+  enabled: false
+  config_path: "./telegram.config.json"
+
+hardware_override: {}
+
+repo_path: "."
+db_path: "./.indra/indra.db"
+workspaces_root: "./.indra/workspaces"
+plugins: []
+log_level: INFO
