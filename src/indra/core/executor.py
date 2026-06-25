@@ -42,22 +42,28 @@ class Executor:
     prompts: PromptManager
     tools: ToolRegistry
     max_tool_retries: int = 2
+    max_tokens_cap: int | None = None
 
     def decide_tool_call(
         self, subtask: Subtask, context: str, tracker: TokenTracker, temperature: float = 0.0
     ) -> ToolCall:
-        available = ", ".join(s.name for s in self.tools.list_schemas())
+        available = "; ".join(
+            f"{s.name} ({s.description})" for s in self.tools.list_schemas()
+        )
         rendered = self.prompts.render(
             "executor",
             subtask=subtask.description,
             available_tools=available,
             context=context,
         )
+        max_tokens = rendered.max_output_tokens
+        if self.max_tokens_cap is not None:
+            max_tokens = min(max_tokens, self.max_tokens_cap)
         tracker.check_budget()
         response = self.provider.complete(
             CompletionRequest(
                 prompt=rendered.text,
-                max_tokens=rendered.max_output_tokens,
+                max_tokens=max_tokens,
                 temperature=temperature,
                 json_schema=_TOOL_CALL_SCHEMA,
             )
@@ -86,11 +92,11 @@ class Executor:
             try:
                 self.tools.validate_input(call.tool_name, call.params)
             except ToolValidationError as exc:
-                return ToolResult(success=False, error=str(exc))
+                return ToolResult(success=False, error=str(exc), retryable=False)
 
             tool = self.tools.get(call.tool_name)
             last_result = tool.run(call.params)
-            if last_result.success:
+            if last_result.success or not last_result.retryable:
                 return last_result
             attempts += 1
             _logger.info(

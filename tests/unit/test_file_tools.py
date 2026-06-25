@@ -59,6 +59,20 @@ def test_delete_file_removes_it(registry_and_workspace) -> None:
     assert not read_result.success
 
 
+def test_missing_file_read_is_marked_non_retryable(registry_and_workspace) -> None:
+    registry, _ = registry_and_workspace
+    result = registry.get("read_file").run({"path": "missing.txt"})
+    assert not result.success
+    assert result.retryable is False
+
+
+def test_path_escape_is_marked_non_retryable(registry_and_workspace) -> None:
+    registry, _ = registry_and_workspace
+    result = registry.get("write_file").run({"path": "../escape.txt", "content": "x"})
+    assert not result.success
+    assert result.retryable is False
+
+
 def test_registry_input_validation_rejects_missing_required_field(registry_and_workspace) -> None:
     registry, _ = registry_and_workspace
     with pytest.raises(ToolValidationError):

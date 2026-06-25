@@ -37,6 +37,7 @@ def create_and_run_task(req: CreateTaskRequest) -> dict:
         "task_id": result.task_id,
         "status": result.status.value,
         "summary": result.summary,
+        "artifacts": result.artifacts,
         "llm_calls_used": result.llm_calls_used,
         "run_profile": {
             "thinking_level": profile.thinking_level,

@@ -50,6 +50,7 @@ class Planner:
     provider: ModelProvider
     prompts: PromptManager
     max_parse_retries: int = 1
+    max_tokens_cap: int | None = None
 
     def create_plan(
         self,
@@ -57,10 +58,18 @@ class Planner:
         repo_map: str,
         tracker: TokenTracker,
         temperature: float = 0.0,
+        previous_failure: str = "none",
     ) -> Plan:
         rendered = self.prompts.render(
-            "planner", goal=task.description, repo_map=repo_map, constraints="none"
+            "planner",
+            goal=task.description,
+            repo_map=repo_map,
+            constraints="none",
+            previous_failure=previous_failure,
         )
+        max_tokens = rendered.max_output_tokens
+        if self.max_tokens_cap is not None:
+            max_tokens = min(max_tokens, self.max_tokens_cap)
 
         last_error: Exception | None = None
         for attempt in range(self.max_parse_retries + 1):
@@ -68,7 +77,7 @@ class Planner:
             response = self.provider.complete(
                 CompletionRequest(
                     prompt=rendered.text,
-                    max_tokens=rendered.max_output_tokens,
+                    max_tokens=max_tokens,
                     temperature=temperature,
                     json_schema=_PLAN_JSON_SCHEMA,
                 )

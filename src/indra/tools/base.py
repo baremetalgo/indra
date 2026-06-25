@@ -28,6 +28,14 @@ class ToolResult:
     output: Any = None
     error: str | None = None
     duration_ms: int = 0
+    retryable: bool = True
+    """Whether retrying the identical call could plausibly succeed.
+
+    Deterministic failures (file not found, invalid path, bad input)
+    should set this to False — retrying the exact same params again
+    wastes the tool-retry budget for zero new information. Only
+    transient failures (timeouts, locks) should leave this True.
+    """
 
 
 class Tool(Protocol):

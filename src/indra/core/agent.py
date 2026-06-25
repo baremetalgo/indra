@@ -4,7 +4,9 @@ Implements the loop from §6 of the design doc: plan once, then for each
 subtask retrieve context -> pick a tool -> run it -> evaluate
 deterministically -> update memory -> move to the next subtask, bounded
 by ``max_steps`` and the per-task LLM call budget. On failure it
-re-plans at most ``max_replan_attempts`` times before giving up.
+re-plans at most ``max_replan_attempts`` times before giving up — and
+crucially, tells the planner *why* the previous attempt failed, so
+re-planning has new information instead of regenerating the same plan.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ class AgentRuntime:
         tracker = TokenTracker(task_id=task.id, max_calls=profile.max_llm_calls)
         replans_used = 0
         steps_used = 0
+        answers: list[str] = []
 
         self.task_manager.transition(task, "plan")
         try:
@@ -60,7 +63,7 @@ class AgentRuntime:
             if not pending:
                 self.task_manager.transition(task, "evaluate")
                 self.task_manager.transition(task, "complete")
-                return self._finish(task, tracker, success=True)
+                return self._finish(task, tracker, success=True, artifacts=answers)
 
             for subtask in pending:
                 steps_used += 1
@@ -71,17 +74,22 @@ class AgentRuntime:
                     return self._finish(
                         task, tracker, success=False,
                         reason=f"max_steps exceeded ({profile.max_steps})",
+                        artifacts=answers,
                     )
 
                 ctx = self.context.build_execution_context(subtask.description)
                 call = None
                 result = None
+                failure_reason = "none"
                 try:
                     call = self.executor.decide_tool_call(
                         subtask, ctx, tracker, profile.temperature
                     )
                     result = self.executor.execute_subtask(call)
+                    if not result.success:
+                        failure_reason = f"tool '{call.tool_name}' failed: {result.error}"
                 except (ToolSelectionError, BudgetExceededError) as exc:
+                    failure_reason = str(exc)
                     _logger.warning(
                         "subtask_failed",
                         extra={"indra_extra": {"subtask": subtask.id, "error": str(exc)}},
@@ -101,6 +109,8 @@ class AgentRuntime:
                 if success:
                     self.plan_repo.mark_subtask_done(subtask.id)
                     plan = _mark_done(plan, subtask.id)
+                    if call is not None and call.tool_name == "answer":
+                        answers.append(str(result.output.get("answer", "")))
                     self.memory.remember_working(
                         MemoryItem(
                             id=new_id(),
@@ -117,32 +127,50 @@ class AgentRuntime:
                         self.task_manager.transition(task, "abandon")
                         return self._finish(
                             task, tracker, success=False,
-                            reason="subtask failed, replan budget exhausted",
+                            reason=f"subtask failed, replan budget exhausted: {failure_reason}",
+                            artifacts=answers,
                         )
                     self.task_manager.transition(task, "block")
                     self.task_manager.transition(task, "replan")
                     replans_used += 1
                     try:
-                        plan = self._plan(task, repo_map, tracker, profile)
+                        plan = self._plan(
+                            task, repo_map, tracker, profile, previous_failure=failure_reason
+                        )
                     except PlanningError as exc:
                         self.task_manager.transition(task, "execute")
                         self.task_manager.transition(task, "evaluate")
                         self.task_manager.transition(task, "block")
                         self.task_manager.transition(task, "abandon")
                         return self._finish(
-                            task, tracker, success=False, reason=f"replanning failed: {exc}"
+                            task, tracker, success=False, reason=f"replanning failed: {exc}",
+                            artifacts=answers,
                         )
                     self.task_manager.attach_plan(task, plan.id)
                     self.task_manager.transition(task, "execute")
                     break  # restart the pending-subtasks loop with the new plan
 
-    def _plan(self, task: Task, repo_map: str, tracker, profile: RunProfile) -> Plan:
-        plan = self.planner.create_plan(task, repo_map, tracker, profile.temperature)
+    def _plan(
+        self,
+        task: Task,
+        repo_map: str,
+        tracker,
+        profile: RunProfile,
+        previous_failure: str = "none",
+    ) -> Plan:
+        plan = self.planner.create_plan(
+            task, repo_map, tracker, profile.temperature, previous_failure=previous_failure
+        )
         self.plan_repo.save(plan)
         return plan
 
     def _finish(
-        self, task: Task, tracker: TokenTracker, success: bool, reason: str = "ok"
+        self,
+        task: Task,
+        tracker: TokenTracker,
+        success: bool,
+        reason: str = "ok",
+        artifacts: list[str] | None = None,
     ) -> TaskResult:
         if success:
             self.memory.promote_to_long_term(
@@ -156,6 +184,7 @@ class AgentRuntime:
             task_id=task.id,
             status=status,
             summary=reason,
+            artifacts=artifacts or [],
             llm_calls_used=tracker.calls_used,
         )
 

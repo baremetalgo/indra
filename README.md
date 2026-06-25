@@ -20,18 +20,27 @@ structured logging, and a CLI/API split.
 - SQLite schema + migrations
 - Structured JSON logging + per-task LLM call budget tracking
 - Workspace sandboxing (path-containment enforced centrally, symlink-safe)
-- Tool registry + file tools (read/write/list/delete), schema-validated
+- Tool registry + file tools (read/write/list/delete) + an `answer` tool
+  for question/explanation subtasks that don't need a file/shell action,
+  all schema-validated
 - Model provider abstraction: `mock` (default, no model needed) and
   `llama_cpp` (grammar-constrained JSON decoding)
-- Planner → Executor → Agent loop with bounded re-planning and a hard
-  `max_steps` safety valve — never crashes on bad/unparseable model output
+- Planner → Executor → Agent loop with bounded re-planning (the planner
+  is told *why* the previous attempt failed, so re-planning picks a
+  different approach instead of repeating it) and a hard `max_steps`
+  safety valve — never crashes on bad/unparseable model output
+- Tool retries distinguish transient vs. deterministic failures
+  (`ToolResult.retryable`) — a `FileNotFoundError` is not retried 3x
+  with the same doomed params
 - Working/long-term memory with deterministic (non-LLM) relevance
   scoring, deduplication, and token-budgeted retrieval
 - `RunProfile` resolution from `--thinking-level` / `--reasoning-effort`
-  / `--max-steps`
-- FastAPI app (workspaces/sessions/tasks/memory/logs) + a thin CLI that
-  talks to it
-- 43 passing unit/integration tests
+  / `--max-steps`, plus `model.max_tokens_per_call` as a hard per-call cap
+- FastAPI app (workspaces/sessions/tasks/memory/logs) + a CLI that talks
+  to it — running `indra` with no arguments drops straight into an
+  interactive chat REPL (Claude-Code style); `indra run` remains for
+  one-shot/scripted use
+- 51 passing unit/integration tests
 
 **Not yet implemented** (see `PLAN.md` §19 for the full roadmap):
 repository indexing (tree-sitter symbol/import graphs), git/shell/test/
@@ -45,7 +54,13 @@ slice of work.
 
 ```bash
 pip install -e .
-indra doctor                                  # sanity check (mock backend, no model needed)
+indra            # interactive REPL (mock backend, no model needed)
+```
+
+Or step by step:
+
+```bash
+indra doctor                                  # sanity check
 indra workspace create demo --path ./my-project --default
 indra run "create a file named notes.txt with some text" --workspace demo --thinking-level low
 ```
@@ -62,13 +77,15 @@ model:
   backend: llama_cpp
   model_path: "/path/to/your-model.Q4_K_M.gguf"
   context_size: 4096
-  gpu_layers: 20
+  max_tokens_per_call: 1024
+  gpu_layers: 40
+  temperature: 0.0
 ```
 
 ```bash
 pip install -e ".[llama-cpp]"
 indra doctor
-indra run "your task" --workspace demo
+indra            # or: indra run "your task" --workspace demo
 ```
 
 ## Development

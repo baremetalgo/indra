@@ -36,7 +36,7 @@ class ReadFileTool:
             target = self._manager.resolve_path(self._workspace, params["path"])
             content = target.read_text(encoding="utf-8")
         except (WorkspaceError, OSError) as exc:
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, error=str(exc), retryable=False)
         return ToolResult(
             success=True,
             output={"content": content},
@@ -70,7 +70,7 @@ class WriteFileTool:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(params["content"], encoding="utf-8")
         except (WorkspaceError, OSError) as exc:
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, error=str(exc), retryable=False)
         return ToolResult(
             success=True,
             output={"bytes_written": len(params["content"].encode("utf-8"))},
@@ -98,14 +98,14 @@ class ListFilesTool:
         try:
             target = self._manager.resolve_path(self._workspace, params.get("path", "."))
             if not target.exists():
-                return ToolResult(success=False, error=f"No such path: {target}")
+                return ToolResult(success=False, error=f"No such path: {target}", retryable=False)
             files = sorted(
                 str(p.relative_to(self._workspace.root_path.resolve()))
                 for p in target.rglob("*")
                 if p.is_file()
             )
         except (WorkspaceError, OSError) as exc:
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, error=str(exc), retryable=False)
         return ToolResult(
             success=True,
             output={"files": files},
@@ -134,10 +134,10 @@ class DeleteFileTool:
         try:
             target = self._manager.resolve_path(self._workspace, params["path"])
             if not target.exists():
-                return ToolResult(success=False, error=f"No such file: {target}")
+                return ToolResult(success=False, error=f"No such file: {target}", retryable=False)
             target.unlink()
         except (WorkspaceError, OSError) as exc:
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, error=str(exc), retryable=False)
         return ToolResult(
             success=True,
             output={"deleted": True},

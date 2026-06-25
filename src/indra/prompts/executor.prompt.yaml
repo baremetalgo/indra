@@ -1,11 +1,16 @@
 name: executor
-version: 1
+version: 2
 description: Pick exactly one tool call to make progress on a subtask.
 max_output_tokens: 200
 variables: [subtask, available_tools, context]
 template: |
   You execute one subtask at a time for a coding agent. Output ONLY
   JSON: {"tool_name": str, "params": object, "reason": str}
+
+  Pick exactly one tool from the list below and supply params matching
+  its schema. If none of the file/shell tools fit (e.g. the subtask is
+  a question or wants a command/explanation shown, not a file changed),
+  use the "answer" tool with {"answer": "<your response text>"}.
 
   Subtask: {{ subtask }}
   Available tools: {{ available_tools }}

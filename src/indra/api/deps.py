@@ -32,6 +32,7 @@ from indra.storage.repositories import (
     ToolCallRepository,
     WorkspaceRepository,
 )
+from indra.tools.answer_tool import register_answer_tool
 from indra.tools.base import ToolRegistry
 from indra.tools.file_tools import register_file_tools
 from indra.workspaces.workspace_manager import Workspace, WorkspaceManager
@@ -71,6 +72,7 @@ def build_provider(config: IndraConfig) -> ModelProvider:
 def build_tool_registry(workspace: Workspace, workspaces: WorkspaceManager) -> ToolRegistry:
     registry = ToolRegistry()
     register_file_tools(registry, workspace, workspaces)
+    register_answer_tool(registry)
     return registry
 
 
@@ -78,10 +80,11 @@ def build_agent_runtime(state: AppState, workspace: Workspace) -> AgentRuntime:
     provider = build_provider(state.config)
     registry = build_tool_registry(workspace, state.workspaces)
     mem = MemoryManager(LongTermMemoryStore(state.db), max_tokens=state.config.memory.max_tokens)
+    cap = state.config.model.max_tokens_per_call
     return AgentRuntime(
         task_manager=TaskManager(TaskRepository(state.db)),
-        planner=Planner(provider, state.prompts),
-        executor=Executor(provider, state.prompts, registry),
+        planner=Planner(provider, state.prompts, max_tokens_cap=cap),
+        executor=Executor(provider, state.prompts, registry, max_tokens_cap=cap),
         memory=mem,
         context=ContextManager(mem),
         plan_repo=PlanRepository(state.db),

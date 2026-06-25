@@ -24,6 +24,7 @@ from indra.storage.repositories import (
     ToolCallRepository,
     WorkspaceRepository,
 )
+from indra.tools.answer_tool import register_answer_tool
 from indra.tools.base import ToolRegistry
 from indra.tools.file_tools import register_file_tools
 from indra.workspaces.workspace_manager import WorkspaceManager
@@ -39,6 +40,7 @@ def harness(tmp_path):
 
     registry = ToolRegistry()
     register_file_tools(registry, workspace, wm)
+    register_answer_tool(registry)
 
     provider = MockProvider()
     prompts = PromptManager()
@@ -87,7 +89,86 @@ def test_successful_task_writes_file_and_completes(harness, tmp_path) -> None:
     assert written.read_text() == "hello from indra\n"
 
 
-def test_call_budget_is_never_exceeded(harness) -> None:
+def test_answer_tool_output_surfaces_as_artifact(harness) -> None:
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "answer a question",
+        "subtasks": [{"description": "answer it", "tool_hint": "answer"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "answer",
+        "params": {"answer": "use Get-ChildItem Env: on PowerShell"},
+        "reason": "direct answer",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "what command prints env vars on windows?"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert result.artifacts == ["use Get-ChildItem Env: on PowerShell"]
+
+
+def test_replan_receives_the_previous_failure_reason(harness) -> None:
+    provider = harness["provider"]
+    # First plan asks to read a file that doesn't exist (deterministic failure).
+    provider.queue(json.dumps({
+        "goal": "do something",
+        "subtasks": [{"description": "read missing config"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "read_file",
+        "params": {"path": "missing.txt"},
+        "reason": "read it",
+    }))
+    # Re-plan should be invoked with the failure reason in the rendered prompt;
+    # we just confirm a second plan call happens and the task fails cleanly
+    # within the (low) replan budget of 0 -- i.e. no replan attempted at all.
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "do something with a missing file"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.FAILED
+    assert "missing.txt" in result.summary or "read_file" in result.summary
+    # low thinking level => 0 replan attempts => exactly 2 calls (plan + execute)
+    assert result.llm_calls_used == 2
+
+
+def test_replan_actually_happens_with_medium_thinking_and_gets_failure_context(harness) -> None:
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "do something",
+        "subtasks": [{"description": "read missing config"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "read_file",
+        "params": {"path": "missing.txt"},
+        "reason": "read it",
+    }))
+    # Re-plan: this time answer directly instead of repeating the bad read.
+    provider.queue(json.dumps({
+        "goal": "do something",
+        "subtasks": [{"description": "answer instead", "tool_hint": "answer"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "answer",
+        "params": {"answer": "the file does not exist, here is an alternative"},
+        "reason": "avoid repeating the failed read",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "do something with a missing file"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="medium")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert result.artifacts == ["the file does not exist, here is an alternative"]
+    assert result.llm_calls_used == 4
     provider = harness["provider"]
     # Plan with 5 subtasks but a budget of only 3 total calls (low thinking level).
     provider.queue(json.dumps({

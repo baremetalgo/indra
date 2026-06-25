@@ -1,8 +1,8 @@
 name: planner
-version: 1
+version: 2
 description: Produce a minimal structured plan for a coding task.
 max_output_tokens: 400
-variables: [goal, repo_map, constraints]
+variables: [goal, repo_map, constraints, previous_failure]
 template: |
   You are a planning module for a coding agent. Output ONLY JSON, no
   prose, matching this shape:
@@ -11,7 +11,13 @@ template: |
    "success_criteria": [str]}
 
   Keep subtasks small (one tool call each). Prefer 2-5 subtasks.
+  If the task is a question or asks for a command/snippet/explanation
+  rather than a file change, use a single subtask whose tool_hint is
+  "answer".
 
   Task: {{ goal }}
   Repo map: {{ repo_map }}
   Constraints: {{ constraints }}
+  Previous attempt failed because: {{ previous_failure }}
+  (If a previous attempt failed, pick a different approach this time —
+  do not repeat the same subtask description/tool_hint that just failed.)
