@@ -16,10 +16,27 @@ banner and all status markers stick to plain ASCII.
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 import typer
 
 from indra.cli.client import get_client
+
+# On Windows, Click uses a special Unicode console writer
+# (click._winconsole) whenever stdout's encoding isn't already UTF-8.
+# That writer calls the raw Win32 WriteConsoleW API directly, and if a
+# native library (llama.cpp's logging, in practice) has touched the
+# console state, the cached handle can go stale and WriteConsoleW fails
+# with ERROR_INVALID_HANDLE (OSError: Windows error: 6). Reconfiguring
+# stdout/stderr to UTF-8 up front makes Click skip that code path
+# entirely in most cases; this is a no-op on platforms where it's not
+# needed or not supported.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):
+        pass
 
 app = typer.Typer(no_args_is_help=False, add_completion=False)
 workspace_app = typer.Typer(no_args_is_help=True)
@@ -34,8 +51,52 @@ BANNER = r"""
 """
 
 
+def _safe_echo(text: str = "", fg: str | None = None, bold: bool = False) -> None:
+    """Print ``text`` and never crash the process if the console can't.
+
+    Falls back through three I/O paths in order: Typer/Click's normal
+    echo, plain stdout, then a raw OS-level write. This exists because
+    Click's Windows Unicode console writer can hit a stale console
+    handle (ERROR_INVALID_HANDLE) after a native library has written to
+    the console — see the comment at the top of this module. A failed
+    print should never take down an otherwise-successful task result.
+    """
+    try:
+        if fg or bold:
+            typer.secho(text, fg=fg, bold=bold)
+        else:
+            typer.echo(text)
+        return
+    except OSError:
+        pass
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+        return
+    except OSError:
+        pass
+    try:
+        os.write(1, (text + "\n").encode("utf-8", errors="replace"))
+    except OSError:
+        pass  # genuinely nothing we can do; don't crash the task over a print
+
+
 def _print_banner() -> None:
-    typer.echo(BANNER)
+    _safe_echo(BANNER)
+
+
+def _safe_prompt(label: str) -> str:
+    """Read one line of input, falling back to plain ``input()`` on OSError.
+
+    ``typer.prompt`` renders its label through the same Click writer
+    that can hit a stale Windows console handle (see ``_safe_echo``).
+    """
+    try:
+        return typer.prompt(label, prompt_suffix="")
+    except OSError:
+        sys.stdout.write(label)
+        sys.stdout.flush()
+        return input()
 
 
 @app.callback(invoke_without_command=True)
@@ -59,10 +120,10 @@ def _default_workspace(client) -> str | None:
 
 def _print_task_result(data: dict) -> None:
     for answer in data.get("artifacts", []):
-        typer.echo(answer)
-        typer.echo("")
+        _safe_echo(answer)
+        _safe_echo("")
     color = typer.colors.GREEN if data["status"] == "done" else typer.colors.YELLOW
-    typer.secho(
+    _safe_echo(
         f"[{data['status']}] {data['summary']}  (llm calls used: {data['llm_calls_used']})",
         fg=color,
     )
@@ -96,7 +157,7 @@ def _chat_impl(
     try:
         ws = workspace or _default_workspace(client)
         if ws is None:
-            typer.secho(
+            _safe_echo(
                 "No workspace found. Create one first:\n"
                 "  indra workspace create <name> --path <dir> --default",
                 fg=typer.colors.YELLOW,
@@ -107,19 +168,19 @@ def _chat_impl(
         session_resp.raise_for_status()
         session_id = session_resp.json()["session_id"]
 
-        typer.echo(f"workspace: {ws}  |  thinking: {thinking_level}  |  type 'exit' to quit")
-        typer.echo("")
+        _safe_echo(f"workspace: {ws}  |  thinking: {thinking_level}  |  type 'exit' to quit")
+        _safe_echo("")
 
         while True:
             try:
-                text = typer.prompt(">", prompt_suffix=" ")
+                text = _safe_prompt("> ")
             except (EOFError, KeyboardInterrupt):
-                typer.echo("\nbye.")
+                _safe_echo("\nbye.")
                 break
 
             stripped = text.strip()
             if stripped.lower() in ("exit", "quit", ":q"):
-                typer.echo("bye.")
+                _safe_echo("bye.")
                 break
             if not stripped:
                 continue
@@ -139,8 +200,8 @@ def _chat_impl(
                 resp.raise_for_status()
                 _print_task_result(resp.json())
             except Exception as exc:  # noqa: BLE001 - keep the REPL alive on any error
-                typer.secho(f"error: {exc}", fg=typer.colors.RED)
-            typer.echo("")
+                _safe_echo(f"error: {exc}", fg=typer.colors.RED)
+            _safe_echo("")
     finally:
         client.close()
 
@@ -181,7 +242,7 @@ def run(
         task_resp.raise_for_status()
         data = task_resp.json()
         if as_json:
-            typer.echo(json.dumps(data, indent=2))
+            _safe_echo(json.dumps(data, indent=2))
         else:
             _print_task_result(data)
     finally:
@@ -200,7 +261,7 @@ def workspace_create(
             "/workspaces", json={"name": name, "root_path": path, "is_default": default}
         )
         resp.raise_for_status()
-        typer.echo(json.dumps(resp.json(), indent=2))
+        _safe_echo(json.dumps(resp.json(), indent=2))
     finally:
         client.close()
 
@@ -213,7 +274,7 @@ def workspace_list() -> None:
         resp.raise_for_status()
         for ws in resp.json():
             marker = "*" if ws.get("is_default") else " "
-            typer.echo(f"{marker} {ws['name']:<20} {ws['root_path']}")
+            _safe_echo(f"{marker} {ws['name']:<20} {ws['root_path']}")
     finally:
         client.close()
 
@@ -224,7 +285,7 @@ def workspace_remove(name: str) -> None:
     try:
         resp = client.delete(f"/workspaces/{name}")
         resp.raise_for_status()
-        typer.echo(f"removed: {name}")
+        _safe_echo(f"removed: {name}")
     finally:
         client.close()
 
@@ -236,9 +297,9 @@ def config_show(path: str = typer.Option("indra.config.yaml", "--path")) -> None
     try:
         config = load_config(path)
     except ConfigError as exc:
-        typer.secho(str(exc), fg=typer.colors.RED)
+        _safe_echo(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    typer.echo(json.dumps(_to_dict(config), indent=2, default=str))
+    _safe_echo(json.dumps(_to_dict(config), indent=2, default=str))
 
 
 @config_app.command("validate")
@@ -248,9 +309,9 @@ def config_validate(path: str = typer.Option("indra.config.yaml", "--path")) -> 
     try:
         load_config(path)
     except ConfigError as exc:
-        typer.secho(f"INVALID: {exc}", fg=typer.colors.RED)
+        _safe_echo(f"INVALID: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    typer.secho("OK", fg=typer.colors.GREEN)
+    _safe_echo("OK", fg=typer.colors.GREEN)
 
 
 @app.command()
@@ -264,9 +325,9 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
 
     try:
         config = load_config(path)
-        typer.secho("[ok] config valid", fg=typer.colors.GREEN)
+        _safe_echo("[ok] config valid", fg=typer.colors.GREEN)
     except ConfigError as exc:
-        typer.secho(f"[fail] config invalid: {exc}", fg=typer.colors.RED)
+        _safe_echo(f"[fail] config invalid: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
     try:
@@ -274,32 +335,32 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
 
         db = Database(config.db_path)
         applied = db.migrate()
-        typer.secho(
+        _safe_echo(
             f"[ok] database ready ({config.db_path}); applied {len(applied)} new migration(s)",
             fg=typer.colors.GREEN,
         )
     except Exception as exc:  # noqa: BLE001 - doctor reports, doesn't crash
         ok = False
-        typer.secho(f"[fail] database: {exc}", fg=typer.colors.RED)
+        _safe_echo(f"[fail] database: {exc}", fg=typer.colors.RED)
 
     if config.model.backend == "mock":
-        typer.secho("[ok] backend: mock (no model load required)", fg=typer.colors.GREEN)
+        _safe_echo("[ok] backend: mock (no model load required)", fg=typer.colors.GREEN)
     elif config.model.backend == "llama_cpp":
         if not Path(config.model.model_path).exists():
             ok = False
-            typer.secho(
+            _safe_echo(
                 f"[fail] llama.cpp model_path not found: {config.model.model_path}",
                 fg=typer.colors.RED,
             )
         else:
-            typer.secho(
+            _safe_echo(
                 f"[ok] llama.cpp model file found: {config.model.model_path}",
                 fg=typer.colors.GREEN,
             )
 
     if not ok:
         raise typer.Exit(code=1)
-    typer.secho("indra doctor: all checks passed", fg=typer.colors.GREEN, bold=True)
+    _safe_echo("indra doctor: all checks passed", fg=typer.colors.GREEN, bold=True)
 
 
 def _to_dict(obj: object) -> object:
