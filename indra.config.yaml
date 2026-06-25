@@ -4,11 +4,11 @@
 # agent loop (planning, tool execution, memory) without any model.
 
 model:
-  backend: mock          # mock | llama_cpp | ollama | openai_compat | vllm | lmstudio
-  model_path: ""
-  context_size: 4096
-  max_tokens_per_call: 512
-  gpu_layers: 20
+  backend: llama_cpp          # mock | llama_cpp | ollama | openai_compat | vllm | lmstudio
+  model_path: "D:\\llama_cpp\\models\\google_gemma-4-E2B-it-Q4_K_M.gguf"
+  context_size: 32768
+  max_tokens_per_call: 4096
+  gpu_layers: 40
   temperature: 0.0
 
 memory:
@@ -25,14 +25,14 @@ agent:
 
 web_search:
   provider: searxng
-  base_url: "http://localhost:8080"
+  base_url: "http://localhost:8088"
   api_key_env: ""
   max_results: 5
   fetch_timeout_seconds: 5.0
   cache_ttl_seconds: 3600
 
 telegram:
-  enabled: false
+  enabled: true
   config_path: "./telegram.config.json"
 
 hardware_override: {}
