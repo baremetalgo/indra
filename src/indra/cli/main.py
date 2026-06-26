@@ -41,8 +41,10 @@ for _stream in (sys.stdout, sys.stderr):
 app = typer.Typer(no_args_is_help=False, add_completion=False)
 workspace_app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer(no_args_is_help=True)
+tools_app = typer.Typer(no_args_is_help=True)
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(config_app, name="config")
+app.add_typer(tools_app, name="tools")
 
 BANNER = r"""
 ======================================================
@@ -294,6 +296,52 @@ def serve(
         port=bind_port,
         log_level=config.log_level.lower(),
     )
+
+
+@tools_app.command("list")
+def tools_list(
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Workspace name."),
+) -> None:
+    """List the tools available to the agent in a workspace."""
+    client = get_client()
+    try:
+        ws = workspace or _default_workspace(client)
+        if ws is None:
+            _safe_echo(
+                "No workspace found. Create one first:\n"
+                "  indra workspace create <name> --path <dir> --default",
+                fg=typer.colors.YELLOW,
+            )
+            return
+        resp = client.get("/tools", params={"workspace": ws})
+        resp.raise_for_status()
+        for tool in resp.json():
+            _safe_echo(f"{tool['name']:<14} {tool['description']}")
+    finally:
+        client.close()
+
+
+@tools_app.command("describe")
+def tools_describe(
+    name: str,
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Workspace name."),
+) -> None:
+    """Show the full description for one tool."""
+    client = get_client()
+    try:
+        ws = workspace or _default_workspace(client)
+        if ws is None:
+            _safe_echo("No workspace found.", fg=typer.colors.YELLOW)
+            return
+        resp = client.get("/tools", params={"workspace": ws})
+        resp.raise_for_status()
+        for tool in resp.json():
+            if tool["name"] == name:
+                _safe_echo(f"{tool['name']}: {tool['description']}")
+                return
+        _safe_echo(f"Unknown tool: {name}", fg=typer.colors.YELLOW)
+    finally:
+        client.close()
 
 
 @workspace_app.command("create")

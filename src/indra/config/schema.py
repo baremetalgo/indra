@@ -61,6 +61,25 @@ class HardwareOverride:
 
 
 @dataclass(frozen=True)
+class ShellConfig:
+    allow_arbitrary: bool = False
+    """If True, bypasses the allowlist entirely -- run any command. Off
+    by default; the shell tool is the highest-risk tool in the system."""
+    allowlist: tuple[str, ...] = (
+        "git", "python", "python3", "pip", "pip3",
+        "npm", "npx", "node", "yarn", "pnpm",
+        "pytest", "go", "cargo", "make",
+        "ls", "dir", "cat", "type", "echo", "pwd",
+        "where", "which", "find", "findstr", "grep", "tree",
+        "java", "mvn", "gradle", "dotnet", "ruby", "php",
+        "rustc", "gcc", "g++", "clang", "tsc",
+        "black", "ruff", "flake8", "mypy", "eslint", "prettier",
+    )
+    timeout_seconds: float = 30.0
+    max_output_bytes: int = 200_000
+
+
+@dataclass(frozen=True)
 class ApiConfig:
     host: str = "127.0.0.1"
     port: int = 8420
@@ -83,6 +102,7 @@ class IndraConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     hardware_override: HardwareOverride = field(default_factory=HardwareOverride)
     api: ApiConfig = field(default_factory=ApiConfig)
+    shell: ShellConfig = field(default_factory=ShellConfig)
     repo_path: str = "."
     db_path: str = "./.indra/indra.db"
     workspaces_root: str = "./.indra/workspaces"

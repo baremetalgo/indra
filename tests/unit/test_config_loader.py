@@ -67,3 +67,27 @@ def test_invalid_port_rejected(tmp_path) -> None:
     path.write_text("api:\n  port: 999999\n")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_shell_config_defaults_have_no_arbitrary_execution(tmp_path) -> None:
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.shell.allow_arbitrary is False
+    assert "git" in config.shell.allowlist
+    assert "rm" not in config.shell.allowlist
+
+
+def test_yaml_list_allowlist_becomes_a_hashable_tuple(tmp_path) -> None:
+    path = tmp_path / "indra.config.yaml"
+    path.write_text("shell:\n  allowlist: [git, python, custom_tool]\n")
+    config = load_config(path)
+    assert config.shell.allowlist == ("git", "python", "custom_tool")
+    # The whole point: IndraConfig must stay hashable for the provider
+    # lru_cache in api/deps.py to work at all.
+    hash(config)
+
+
+def test_invalid_shell_timeout_rejected(tmp_path) -> None:
+    path = tmp_path / "indra.config.yaml"
+    path.write_text("shell:\n  timeout_seconds: 0\n")
+    with pytest.raises(ConfigError):
+        load_config(path)

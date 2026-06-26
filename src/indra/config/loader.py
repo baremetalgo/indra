@@ -20,6 +20,7 @@ from indra.config.schema import (
     IndraConfig,
     MemoryConfig,
     ModelConfig,
+    ShellConfig,
     TelegramConfig,
     WebSearchConfig,
 )
@@ -73,7 +74,12 @@ def _build_section(cls: type, data: dict[str, Any] | None) -> Any:
 
 
 def _coerce_scalar(value: Any, field_type: Any) -> Any:
-    """Best-effort coercion for env-var strings into int/float/bool."""
+    """Best-effort coercion: env-var strings into int/float/bool, and
+    YAML lists into tuples (every IndraConfig field is a frozen
+    dataclass with hashable fields -- a list anywhere breaks that,
+    which breaks the provider lru_cache in api/deps.py)."""
+    if isinstance(value, list):
+        return tuple(value)
     if not isinstance(value, str):
         return value
     type_str = str(field_type)
@@ -117,6 +123,10 @@ def validate_config(config: IndraConfig) -> None:
         errors.append(f"model.backend unknown: {config.model.backend!r}")
     if not (1 <= config.api.port <= 65535):
         errors.append("api.port must be between 1 and 65535")
+    if config.shell.timeout_seconds <= 0:
+        errors.append("shell.timeout_seconds must be > 0")
+    if config.shell.max_output_bytes <= 0:
+        errors.append("shell.max_output_bytes must be > 0")
 
     if errors:
         raise ConfigError("Invalid configuration:\n  - " + "\n  - ".join(errors))
@@ -137,6 +147,7 @@ def load_config(path: str | Path = "indra.config.yaml") -> IndraConfig:
             HardwareOverride, raw.get("hardware_override")
         ),
         api=_build_section(ApiConfig, raw.get("api")),
+        shell=_build_section(ShellConfig, raw.get("shell")),
         repo_path=raw.get("repo_path", "."),
         db_path=raw.get("db_path", "./.indra/indra.db"),
         workspaces_root=raw.get("workspaces_root", "./.indra/workspaces"),

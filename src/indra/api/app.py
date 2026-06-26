@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from indra.api.routes import logs, memory, sessions, tasks, workspaces
+from indra.api.routes import logs, memory, sessions, tasks, tools, workspaces
 
 
 def create_app() -> FastAPI:
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(memory.router)
     app.include_router(logs.router)
+    app.include_router(tools.router)
 
     @app.get("/health")
     def health() -> dict:
