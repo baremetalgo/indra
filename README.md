@@ -1,8 +1,10 @@
 <h1 align="center"> Indra</h1>
-<h3 align="center"> Agentic Harness</h3>
+<p align="center">Intelligent Network for Deliberation, Reasoning & Action</p>
 <p align="center">
   <img src="indra_logo.png" width="50%">
 </p>
+<h3 align="center"> Agentic Harness</h3>
+
 Indra is an AI coding and automation harness designed for lightweight local LLMs, inspired by modern agentic development tools and optimized for consumer hardware.
 
 See [`PLAN.md`](PLAN.md) for the full architecture and design rationale.
