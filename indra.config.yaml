@@ -35,6 +35,15 @@ telegram:
   enabled: false
   config_path: "./telegram.config.json"
 
+# Recommended for model.backend: llama_cpp -- run `indra serve` once
+# (loads the GGUF model a single time) and set base_url below so every
+# CLI command reuses that warm process instead of reloading the model.
+# Leave base_url empty to use the zero-setup in-process fallback.
+api:
+  host: "127.0.0.1"
+  port: 8420
+  base_url: ""
+
 hardware_override: {}
 
 repo_path: "."

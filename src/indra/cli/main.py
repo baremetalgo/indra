@@ -249,6 +249,53 @@ def run(
         client.close()
 
 
+@app.command()
+def serve(
+    host: str = typer.Option(None, "--host", help="Defaults to api.host in config."),
+    port: int = typer.Option(None, "--port", help="Defaults to api.port in config."),
+    path: str = typer.Option("indra.config.yaml", "--config"),
+) -> None:
+    """Run the Indra API as a standalone, long-lived process.
+
+    Recommended for llama.cpp: the GGUF model loads once on the first
+    request and stays warm for every task after that, instead of being
+    reloaded from disk on every `indra run`/`indra chat` invocation.
+    Point the CLI at it by setting `api.base_url` in indra.config.yaml
+    (or the INDRA_API_URL env var) to "http://<host>:<port>".
+    """
+    from indra.config.loader import ConfigError, load_config
+
+    try:
+        config = load_config(path)
+    except ConfigError as exc:
+        _safe_echo(f"[fail] config invalid: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    bind_host = host or config.api.host
+    bind_port = port or config.api.port
+
+    try:
+        import uvicorn
+    except ImportError:
+        _safe_echo(
+            "uvicorn is not installed. Install with: pip install -e .",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    _safe_echo(
+        f"Starting Indra API on http://{bind_host}:{bind_port}\n"
+        f"Point the CLI at it via api.base_url in {path} or INDRA_API_URL.",
+        fg=typer.colors.GREEN,
+    )
+    uvicorn.run(
+        "indra.api.app:app",
+        host=bind_host,
+        port=bind_port,
+        log_level=config.log_level.lower(),
+    )
+
+
 @workspace_app.command("create")
 def workspace_create(
     name: str,
@@ -357,6 +404,26 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
                 f"[ok] llama.cpp model file found: {config.model.model_path}",
                 fg=typer.colors.GREEN,
             )
+
+    if os.environ.get("INDRA_API_URL"):
+        _safe_echo(
+            f"[ok] CLI mode: remote server via INDRA_API_URL={os.environ['INDRA_API_URL']}",
+            fg=typer.colors.GREEN,
+        )
+    elif config.api.base_url:
+        _safe_echo(
+            f"[ok] CLI mode: remote server via api.base_url={config.api.base_url}",
+            fg=typer.colors.GREEN,
+        )
+    elif config.model.backend == "llama_cpp":
+        _safe_echo(
+            "[warn] CLI mode: in-process (no api.base_url / INDRA_API_URL set) -- "
+            "with backend=llama_cpp this reloads the model on every command. "
+            "Run `indra serve` and set api.base_url for a much faster workflow.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        _safe_echo("[ok] CLI mode: in-process (fine for the mock backend)", fg=typer.colors.GREEN)
 
     if not ok:
         raise typer.Exit(code=1)

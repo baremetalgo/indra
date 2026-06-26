@@ -55,6 +55,18 @@ def get_app_state(config_path: str = "indra.config.yaml") -> AppState:
     return AppState(config=config, db=db, workspaces=workspaces, prompts=PromptManager())
 
 
+@lru_cache
+def _build_provider_singleton(config: IndraConfig) -> ModelProvider:
+    """Build the model provider exactly once per process per config.
+
+    This is the difference between `indra serve` loading a GGUF model
+    once and reusing it for every task, versus reloading it from disk
+    on every single request. IndraConfig is a frozen dataclass of
+    hashable fields, so it's safe to use directly as an lru_cache key.
+    """
+    return build_provider(config)
+
+
 def build_provider(config: IndraConfig) -> ModelProvider:
     if config.model.backend == "mock":
         return MockProvider()
@@ -77,7 +89,7 @@ def build_tool_registry(workspace: Workspace, workspaces: WorkspaceManager) -> T
 
 
 def build_agent_runtime(state: AppState, workspace: Workspace) -> AgentRuntime:
-    provider = build_provider(state.config)
+    provider = _build_provider_singleton(state.config)
     registry = build_tool_registry(workspace, state.workspaces)
     mem = MemoryManager(LongTermMemoryStore(state.db), max_tokens=state.config.memory.max_tokens)
     cap = state.config.model.max_tokens_per_call

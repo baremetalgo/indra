@@ -88,6 +88,31 @@ indra doctor
 indra            # or: indra run "your task" --workspace demo
 ```
 
+### Recommended for llama.cpp: run the server separately
+
+Each CLI invocation is its own process — without a standalone server,
+`model.backend: llama_cpp` reloads the entire GGUF model from disk on
+*every single command*, which is most of the latency you'll see.
+Instead, run the API once and point the CLI at it:
+
+```bash
+# terminal 1 -- starts once, loads the model once, stays warm
+indra serve
+
+# indra.config.yaml
+api:
+  base_url: "http://127.0.0.1:8420"
+```
+
+```bash
+# terminal 2 (or any other machine on your network)
+indra run "your task" --workspace demo
+```
+
+`indra doctor` reports which mode you're in (`api.base_url`/
+`INDRA_API_URL` set → remote server; unset → in-process, fine for the
+`mock` backend but not recommended for `llama_cpp`).
+
 ## Development
 
 ```bash

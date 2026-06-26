@@ -61,6 +61,20 @@ class HardwareOverride:
 
 
 @dataclass(frozen=True)
+class ApiConfig:
+    host: str = "127.0.0.1"
+    port: int = 8420
+    base_url: str = ""
+    """If set, the CLI connects to this URL instead of spinning up an
+    in-process API. This is the recommended mode for llama.cpp: run
+    `indra serve` once (model loads a single time), point every CLI
+    invocation at it via this field (or the INDRA_API_URL env var,
+    which always takes precedence), and avoid reloading the GGUF model
+    on every command.
+    """
+
+
+@dataclass(frozen=True)
 class IndraConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
@@ -68,6 +82,7 @@ class IndraConfig:
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     hardware_override: HardwareOverride = field(default_factory=HardwareOverride)
+    api: ApiConfig = field(default_factory=ApiConfig)
     repo_path: str = "."
     db_path: str = "./.indra/indra.db"
     workspaces_root: str = "./.indra/workspaces"

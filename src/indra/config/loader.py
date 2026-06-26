@@ -15,6 +15,7 @@ import yaml
 
 from indra.config.schema import (
     AgentConfig,
+    ApiConfig,
     HardwareOverride,
     IndraConfig,
     MemoryConfig,
@@ -114,6 +115,8 @@ def validate_config(config: IndraConfig) -> None:
         "mock", "llama_cpp", "ollama", "openai_compat", "vllm", "lmstudio",
     ):
         errors.append(f"model.backend unknown: {config.model.backend!r}")
+    if not (1 <= config.api.port <= 65535):
+        errors.append("api.port must be between 1 and 65535")
 
     if errors:
         raise ConfigError("Invalid configuration:\n  - " + "\n  - ".join(errors))
@@ -133,6 +136,7 @@ def load_config(path: str | Path = "indra.config.yaml") -> IndraConfig:
         hardware_override=_build_section(
             HardwareOverride, raw.get("hardware_override")
         ),
+        api=_build_section(ApiConfig, raw.get("api")),
         repo_path=raw.get("repo_path", "."),
         db_path=raw.get("db_path", "./.indra/indra.db"),
         workspaces_root=raw.get("workspaces_root", "./.indra/workspaces"),

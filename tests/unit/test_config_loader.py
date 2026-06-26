@@ -46,3 +46,24 @@ def test_context_size_too_small_rejected(tmp_path) -> None:
     path.write_text("model:\n  context_size: 256\n")
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+def test_api_config_defaults_to_in_process_mode(tmp_path) -> None:
+    config = load_config(tmp_path / "missing.yaml")
+    assert config.api.base_url == ""
+    assert config.api.host == "127.0.0.1"
+    assert config.api.port == 8420
+
+
+def test_api_config_base_url_overrides_in_process_default(tmp_path) -> None:
+    path = tmp_path / "indra.config.yaml"
+    path.write_text("api:\n  base_url: \"http://127.0.0.1:9999\"\n")
+    config = load_config(path)
+    assert config.api.base_url == "http://127.0.0.1:9999"
+
+
+def test_invalid_port_rejected(tmp_path) -> None:
+    path = tmp_path / "indra.config.yaml"
+    path.write_text("api:\n  port: 999999\n")
+    with pytest.raises(ConfigError):
+        load_config(path)
