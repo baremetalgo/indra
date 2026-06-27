@@ -4,6 +4,12 @@ This is the only memory tier that survives across sessions. Working and
 session memory (in-process, cleared on completion) live in
 ``core/memory_manager.py``; this module is purely the persistence layer
 for items that have been deemed worth keeping.
+
+Every read and write is scoped by ``workspace_id``. An earlier version
+of this store had no workspace scoping at all, which meant memory from
+every project leaked into every other project's context -- a real bug
+reported by an early user. Treat ``workspace_id`` as mandatory; there
+is no "global" query path left, deliberately.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ class LongTermMemoryStore:
 
     def add(
         self,
+        workspace_id: str,
         scope: str,
         kind: str,
         content: str,
@@ -39,7 +46,8 @@ class LongTermMemoryStore:
         with self._db.connect() as conn:
             conn.execute(
                 "INSERT INTO memory_items (id, scope, kind, content, relevance, "
-                "session_id, source_task_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "session_id, source_task_id, created_at, workspace_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     item.id,
                     item.scope,
@@ -49,16 +57,17 @@ class LongTermMemoryStore:
                     session_id,
                     source_task_id,
                     item.created_at.isoformat(),
+                    workspace_id,
                 ),
             )
         return item
 
-    def query(self, scope: str | None = None, limit: int = 50) -> list[MemoryItem]:
-        sql = "SELECT * FROM memory_items"
-        args: tuple = ()
+    def query(self, workspace_id: str, scope: str | None = None, limit: int = 50) -> list[MemoryItem]:
+        sql = "SELECT * FROM memory_items WHERE workspace_id = ?"
+        args: tuple = (workspace_id,)
         if scope is not None:
-            sql += " WHERE scope = ?"
-            args = (scope,)
+            sql += " AND scope = ?"
+            args = args + (scope,)
         sql += " ORDER BY relevance DESC LIMIT ?"
         args = args + (limit,)
         with self._db.connect() as conn:

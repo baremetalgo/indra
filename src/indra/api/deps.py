@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from indra.config.loader import load_config
-from indra.config.schema import IndraConfig, ShellConfig
+from indra.config.schema import IndraConfig, ShellConfig, WebSearchConfig
 from indra.core.agent import AgentRuntime
 from indra.core.context_manager import ContextManager
 from indra.core.executor import Executor
@@ -27,6 +27,7 @@ from indra.providers.mock_provider import MockProvider
 from indra.storage.db import Database
 from indra.storage.repositories import (
     PlanRepository,
+    SearchCacheRepository,
     SessionRepository,
     TaskRepository,
     ToolCallRepository,
@@ -37,6 +38,7 @@ from indra.tools.base import ToolRegistry
 from indra.tools.file_tools import register_file_tools
 from indra.tools.git_tools import register_git_tools
 from indra.tools.shell_tools import register_shell_tools
+from indra.tools.web_search_tools import register_web_search_tool
 from indra.workspaces.workspace_manager import Workspace, WorkspaceManager
 
 
@@ -79,25 +81,37 @@ def build_provider(config: IndraConfig) -> ModelProvider:
             model_path=config.model.model_path,
             context_size=config.model.context_size,
             gpu_layers=config.model.gpu_layers,
+            flash_attn=config.model.flash_attn,
         )
     raise ValueError(f"Unsupported backend for this build: {config.model.backend}")
 
 
 def build_tool_registry(
-    workspace: Workspace, workspaces: WorkspaceManager, shell_config: ShellConfig
+    workspace: Workspace,
+    workspaces: WorkspaceManager,
+    shell_config: ShellConfig,
+    web_search_config: WebSearchConfig,
+    db: Database,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     register_file_tools(registry, workspace, workspaces)
     register_answer_tool(registry)
     register_git_tools(registry, workspace, workspaces, timeout=shell_config.timeout_seconds)
     register_shell_tools(registry, workspace, workspaces, shell_config)
+    register_web_search_tool(registry, web_search_config, SearchCacheRepository(db))
     return registry
 
 
 def build_agent_runtime(state: AppState, workspace: Workspace) -> AgentRuntime:
     provider = _build_provider_singleton(state.config)
-    registry = build_tool_registry(workspace, state.workspaces, state.config.shell)
-    mem = MemoryManager(LongTermMemoryStore(state.db), max_tokens=state.config.memory.max_tokens)
+    registry = build_tool_registry(
+        workspace, state.workspaces, state.config.shell, state.config.web_search, state.db
+    )
+    mem = MemoryManager(
+        LongTermMemoryStore(state.db),
+        workspace_id=workspace.id,
+        max_tokens=state.config.memory.max_tokens,
+    )
     cap = state.config.model.max_tokens_per_call
     return AgentRuntime(
         task_manager=TaskManager(TaskRepository(state.db)),

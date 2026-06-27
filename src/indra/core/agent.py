@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from indra.core.context_manager import ContextManager
 from indra.core.executor import Executor, ToolSelectionError
+from indra.core.formatting import format_tool_output
 from indra.core.memory_manager import MemoryManager
 from indra.core.planner import Planner, PlanningError
 from indra.core.run_profile import RunProfile
@@ -109,8 +110,10 @@ class AgentRuntime:
                 if success:
                     self.plan_repo.mark_subtask_done(subtask.id)
                     plan = _mark_done(plan, subtask.id)
-                    if call is not None and call.tool_name == "answer":
-                        answers.append(str(result.output.get("answer", "")))
+                    if call is not None:
+                        formatted = format_tool_output(call.tool_name, result.output)
+                        if formatted is not None:
+                            answers.append(formatted)
                     self.memory.remember_working(
                         MemoryItem(
                             id=new_id(),
@@ -186,6 +189,10 @@ class AgentRuntime:
             summary=reason,
             artifacts=artifacts or [],
             llm_calls_used=tracker.calls_used,
+            prompt_tokens=tracker.total_prompt_tokens(),
+            completion_tokens=tracker.total_completion_tokens(),
+            llm_seconds=round(tracker.total_llm_seconds(), 3),
+            total_seconds=round(tracker.elapsed_seconds(), 3),
         )
 
 

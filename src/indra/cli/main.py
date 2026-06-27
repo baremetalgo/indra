@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 
 import typer
 
@@ -45,13 +47,6 @@ tools_app = typer.Typer(no_args_is_help=True)
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(config_app, name="config")
 app.add_typer(tools_app, name="tools")
-
-BANNER = r"""
-======================================================
-   INDRA -- agentic coding harness for local LLMs
-======================================================
-"""
-
 
 def _safe_echo(text: str = "", fg: str | None = None, bold: bool = False) -> None:
     """Print ``text`` and never crash the process if the console can't.
@@ -83,8 +78,60 @@ def _safe_echo(text: str = "", fg: str | None = None, bold: bool = False) -> Non
         pass  # genuinely nothing we can do; don't crash the task over a print
 
 
-def _print_banner() -> None:
-    _safe_echo(BANNER)
+def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
+    """Print a startup banner built entirely from live data -- tool
+    count, workspace list, and active model config -- rather than
+    decorative placeholders. ASCII-only by design: this is exactly the
+    kind of multi-line, attention-grabbing output most likely to hit
+    the Windows console issue described above, so it sticks to plain
+    characters and goes through _safe_echo line by line.
+    """
+    try:
+        info = client.get("/info").json()
+    except Exception:  # noqa: BLE001 - banner must never block startup
+        info = {}
+    try:
+        tool_names = [t["name"] for t in client.get("/tools", params={"workspace": workspace_name}).json()]
+    except Exception:  # noqa: BLE001
+        tool_names = []
+    try:
+        workspace_names = [w["name"] for w in client.get("/workspaces").json()]
+    except Exception:  # noqa: BLE001
+        workspace_names = []
+
+    backend = info.get("backend", "?")
+    model_label = backend
+    if backend == "llama_cpp" and info.get("model_path"):
+        basename = info["model_path"].replace("\\", "/").rsplit("/", 1)[-1]
+        model_label = f"llama.cpp: {basename}"
+    elif backend == "mock":
+        model_label = "mock (no model loaded)"
+
+    width = 60
+    line = "=" * width
+    _safe_echo(line)
+    _safe_echo(_center("INDRA", width))
+    _safe_echo(_center("agentic coding harness for local LLMs", width))
+    _safe_echo(line)
+    _safe_echo(f" model      : {model_label}")
+    if backend == "llama_cpp":
+        gpu_note = ""
+        if info.get("gpu_layers", 0) > 0:
+            gpu_note = f"  (gpu_layers={info['gpu_layers']}, flash_attn={info.get('flash_attn', False)})"
+        _safe_echo(f" context    : {info.get('context_size', '?')}{gpu_note}")
+    _safe_echo(f" workspace  : {workspace_name}")
+    _safe_echo(f" thinking   : {thinking_level}  (max_steps={info.get('max_steps', '?')})")
+    _safe_echo(f" tools ({len(tool_names)})  : {', '.join(tool_names[:6])}" + (" ..." if len(tool_names) > 6 else ""))
+    if workspace_names:
+        _safe_echo(f" workspaces : {', '.join(workspace_names)}")
+    _safe_echo(line)
+    _safe_echo("type 'exit' to quit  |  indra doctor for diagnostics")
+    _safe_echo("")
+
+
+def _center(text: str, width: int) -> str:
+    pad = max(0, (width - len(text)) // 2)
+    return " " * pad + text
 
 
 def _safe_prompt(label: str) -> str:
@@ -99,6 +146,54 @@ def _safe_prompt(label: str) -> str:
         sys.stdout.write(label)
         sys.stdout.flush()
         return input()
+
+
+class _Spinner:
+    """Shows elapsed time while a blocking request is in flight.
+
+    Indra's structured-output architecture (every model response must
+    be schema-valid JSON, often grammar-constrained at decode time)
+    means there's no clean way to stream raw tokens to the terminal --
+    a partially-streamed JSON object isn't useful to read. This spinner
+    is the honest alternative: it can't show the answer arriving
+    word-by-word, but it proves the process isn't stuck and shows how
+    long inference is actually taking, which was the real complaint.
+    """
+
+    def __init__(self, label: str = "thinking") -> None:
+        self._label = label
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._start = 0.0
+
+    def __enter__(self) -> "_Spinner":
+        self._start = time.monotonic()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def _spin(self) -> None:
+        frames = "|/-\\"
+        i = 0
+        while not self._stop.is_set():
+            elapsed = time.monotonic() - self._start
+            try:
+                sys.stdout.write(f"\r{self._label}... {frames[i % len(frames)]} {elapsed:0.1f}s ")
+                sys.stdout.flush()
+            except OSError:
+                pass
+            i += 1
+            time.sleep(0.2)
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        try:
+            sys.stdout.write("\r" + " " * 30 + "\r")
+            sys.stdout.flush()
+        except OSError:
+            pass
 
 
 @app.callback(invoke_without_command=True)
@@ -125,9 +220,19 @@ def _print_task_result(data: dict) -> None:
         _safe_echo(answer)
         _safe_echo("")
     color = typer.colors.GREEN if data["status"] == "done" else typer.colors.YELLOW
+    _safe_echo(f"[{data['status']}] {data['summary']}", fg=color)
+
+    completion_tokens = data.get("completion_tokens", 0)
+    llm_seconds = data.get("llm_seconds", 0.0)
+    total_seconds = data.get("total_seconds", 0.0)
+    speed = (completion_tokens / llm_seconds) if llm_seconds > 0 else 0.0
+    overhead = max(0.0, total_seconds - llm_seconds)
     _safe_echo(
-        f"[{data['status']}] {data['summary']}  (llm calls used: {data['llm_calls_used']})",
-        fg=color,
+        f"  calls: {data['llm_calls_used']}  |  "
+        f"tokens: {data.get('prompt_tokens', 0)}p/{completion_tokens}c  |  "
+        f"llm: {llm_seconds:.1f}s  |  agent overhead: {overhead:.1f}s  |  "
+        f"total: {total_seconds:.1f}s  |  speed: {speed:.1f} tok/s",
+        fg=typer.colors.CYAN,
     )
 
 
@@ -154,7 +259,6 @@ def _chat_impl(
     reasoning_effort: int,
     max_steps: int | None,
 ) -> None:
-    _print_banner()
     client = get_client()
     try:
         ws = workspace or _default_workspace(client)
@@ -166,12 +270,11 @@ def _chat_impl(
             )
             return
 
+        _print_banner(client, ws, thinking_level)
+
         session_resp = client.post("/sessions", json={"workspace": ws})
         session_resp.raise_for_status()
         session_id = session_resp.json()["session_id"]
-
-        _safe_echo(f"workspace: {ws}  |  thinking: {thinking_level}  |  type 'exit' to quit")
-        _safe_echo("")
 
         while True:
             try:
@@ -188,17 +291,18 @@ def _chat_impl(
                 continue
 
             try:
-                resp = client.post(
-                    "/tasks",
-                    json={
-                        "session_id": session_id,
-                        "description": stripped,
-                        "workspace": ws,
-                        "thinking_level": thinking_level,
-                        "reasoning_effort": reasoning_effort,
-                        "max_steps": max_steps,
-                    },
-                )
+                with _Spinner("thinking"):
+                    resp = client.post(
+                        "/tasks",
+                        json={
+                            "session_id": session_id,
+                            "description": stripped,
+                            "workspace": ws,
+                            "thinking_level": thinking_level,
+                            "reasoning_effort": reasoning_effort,
+                            "max_steps": max_steps,
+                        },
+                    )
                 resp.raise_for_status()
                 _print_task_result(resp.json())
             except Exception as exc:  # noqa: BLE001 - keep the REPL alive on any error
@@ -230,17 +334,31 @@ def run(
         session_resp.raise_for_status()
         session_id = session_resp.json()["session_id"]
 
-        task_resp = client.post(
-            "/tasks",
-            json={
-                "session_id": session_id,
-                "description": description,
-                "workspace": workspace,
-                "thinking_level": thinking_level,
-                "reasoning_effort": reasoning_effort,
-                "max_steps": max_steps,
-            },
-        )
+        if as_json:
+            task_resp = client.post(
+                "/tasks",
+                json={
+                    "session_id": session_id,
+                    "description": description,
+                    "workspace": workspace,
+                    "thinking_level": thinking_level,
+                    "reasoning_effort": reasoning_effort,
+                    "max_steps": max_steps,
+                },
+            )
+        else:
+            with _Spinner("thinking"):
+                task_resp = client.post(
+                    "/tasks",
+                    json={
+                        "session_id": session_id,
+                        "description": description,
+                        "workspace": workspace,
+                        "thinking_level": thinking_level,
+                        "reasoning_effort": reasoning_effort,
+                        "max_steps": max_steps,
+                    },
+                )
         task_resp.raise_for_status()
         data = task_resp.json()
         if as_json:
@@ -452,6 +570,37 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
                 f"[ok] llama.cpp model file found: {config.model.model_path}",
                 fg=typer.colors.GREEN,
             )
+
+        if config.model.gpu_layers > 0:
+            from indra.providers.llama_cpp_provider import gpu_offload_supported
+
+            supports_gpu = gpu_offload_supported()
+            if supports_gpu is True:
+                _safe_echo(
+                    "[ok] installed llama-cpp-python supports GPU offload",
+                    fg=typer.colors.GREEN,
+                )
+            elif supports_gpu is False:
+                _safe_echo(
+                    "[warn] installed llama-cpp-python is CPU-only -- gpu_layers "
+                    "will be silently ignored. `pip install llama-cpp-python` "
+                    "installs a CPU-only wheel on most platforms. Reinstall with "
+                    "GPU support, e.g.:\n"
+                    "  CMAKE_ARGS=\"-DGGML_CUDA=on\" pip install llama-cpp-python "
+                    "--force-reinstall --no-cache-dir\n"
+                    "or use one of the prebuilt CUDA wheels at "
+                    "https://github.com/abetlen/llama-cpp-python#installation",
+                    fg=typer.colors.YELLOW,
+                )
+            else:
+                _safe_echo(
+                    "[info] could not determine whether this llama-cpp-python "
+                    "build supports GPU offload (older/newer binding without "
+                    "llama_supports_gpu_offload()). If inference looks CPU-bound, "
+                    "reinstall with CUDA support -- see "
+                    "https://github.com/abetlen/llama-cpp-python#installation",
+                    fg=typer.colors.CYAN,
+                )
 
     if os.environ.get("INDRA_API_URL"):
         _safe_echo(

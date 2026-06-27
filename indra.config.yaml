@@ -10,6 +10,12 @@ model:
   max_tokens_per_call: 4096
   gpu_layers: 40
   temperature: 0.0
+  flash_attn: false
+  # `indra doctor` checks whether the installed llama-cpp-python build
+  # actually supports GPU offload -- `pip install llama-cpp-python`
+  # alone installs a CPU-only wheel on most platforms, which silently
+  # makes gpu_layers do nothing. See the doctor output for the
+  # reinstall command if that's the case.
 
 memory:
   max_tokens: 300

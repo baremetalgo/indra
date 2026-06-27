@@ -39,6 +39,10 @@ def create_and_run_task(req: CreateTaskRequest) -> dict:
         "summary": result.summary,
         "artifacts": result.artifacts,
         "llm_calls_used": result.llm_calls_used,
+        "prompt_tokens": result.prompt_tokens,
+        "completion_tokens": result.completion_tokens,
+        "llm_seconds": result.llm_seconds,
+        "total_seconds": result.total_seconds,
         "run_profile": {
             "thinking_level": profile.thinking_level,
             "max_llm_calls": profile.max_llm_calls,

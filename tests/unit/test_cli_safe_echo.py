@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from unittest import mock
 
 import typer
@@ -39,3 +40,22 @@ def test_safe_prompt_falls_back_to_plain_input(monkeypatch) -> None:
     monkeypatch.setattr("builtins.input", lambda: "typed text")
     result = _safe_prompt("> ")
     assert result == "typed text"
+
+
+def test_spinner_enter_exit_does_not_raise(capsys) -> None:
+    from indra.cli.main import _Spinner
+
+    with _Spinner("thinking"):
+        time.sleep(0.05)
+    # no exception means the background thread started and stopped cleanly
+
+
+def test_spinner_survives_a_broken_stdout(monkeypatch) -> None:
+    from indra.cli.main import _Spinner
+
+    monkeypatch.setattr(
+        "sys.stdout.write", mock.Mock(side_effect=OSError("Windows error: 6"))
+    )
+    with _Spinner("thinking"):
+        time.sleep(0.05)
+    # must not raise even though every write attempt fails

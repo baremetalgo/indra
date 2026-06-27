@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from indra.schemas.plan import Plan, Subtask
@@ -180,6 +180,44 @@ class ToolCallRepository:
                     duration_ms,
                     _utcnow(),
                 ),
+            )
+
+
+class SearchCacheRepository:
+    """TTL cache for the web_search tool, backed by the search_cache table.
+
+    Keeps repeated/near-duplicate queries within a task (or across
+    tasks, within the TTL) from costing another network round-trip.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def get(self, query_hash: str) -> list[dict[str, Any]] | None:
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT results_json, expires_at FROM search_cache WHERE query_hash = ?",
+                (query_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        if row["expires_at"] < _utcnow():
+            return None  # expired; caller will overwrite via set()
+        return json.loads(row["results_json"])
+
+    def set(
+        self, query_hash: str, query_text: str, results: list[dict[str, Any]],
+        provider: str, ttl_seconds: int,
+    ) -> None:
+        expires_at = (
+            datetime.fromisoformat(_utcnow()) + timedelta(seconds=ttl_seconds)
+        ).isoformat()
+        with self._db.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO search_cache "
+                "(query_hash, query_text, provider, results_json, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (query_hash, query_text, provider, json.dumps(results), _utcnow(), expires_at),
             )
 
 

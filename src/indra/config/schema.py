@@ -19,6 +19,11 @@ class ModelConfig:
     max_tokens_per_call: int = 512
     gpu_layers: int = 20
     temperature: float = 0.0
+    flash_attn: bool = False
+    """Passed to llama-cpp-python's Llama(flash_attn=...). Requires a
+    build/GPU that supports it; silently ignored (with a logged
+    warning) if the installed llama-cpp-python version doesn't accept
+    the kwarg."""
 
 
 @dataclass(frozen=True)

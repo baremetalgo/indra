@@ -7,6 +7,7 @@ single call shape, not a separate code path.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from indra.observability.logging import get_logger
@@ -74,6 +75,7 @@ class Planner:
         last_error: Exception | None = None
         for attempt in range(self.max_parse_retries + 1):
             tracker.check_budget()
+            call_start = time.monotonic()
             response = self.provider.complete(
                 CompletionRequest(
                     prompt=rendered.text,
@@ -83,7 +85,8 @@ class Planner:
                 )
             )
             tracker.record(
-                "plan", response.prompt_tokens, response.completion_tokens
+                "plan", response.prompt_tokens, response.completion_tokens,
+                duration_seconds=time.monotonic() - call_start,
             )
             try:
                 return Plan.from_model_json(response.text, task_id=task.id)

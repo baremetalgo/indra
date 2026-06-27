@@ -9,6 +9,7 @@ model" rule from §6/§11 of the design doc.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 
 from indra.observability.logging import get_logger
@@ -60,6 +61,7 @@ class Executor:
         if self.max_tokens_cap is not None:
             max_tokens = min(max_tokens, self.max_tokens_cap)
         tracker.check_budget()
+        call_start = time.monotonic()
         response = self.provider.complete(
             CompletionRequest(
                 prompt=rendered.text,
@@ -68,7 +70,10 @@ class Executor:
                 json_schema=_TOOL_CALL_SCHEMA,
             )
         )
-        tracker.record("execute", response.prompt_tokens, response.completion_tokens)
+        tracker.record(
+            "execute", response.prompt_tokens, response.completion_tokens,
+            duration_seconds=time.monotonic() - call_start,
+        )
 
         try:
             data = json.loads(response.text)

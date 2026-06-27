@@ -15,7 +15,9 @@ def list_tools(workspace: str) -> list[dict]:
         ws = state.workspaces.get(workspace)
     except WorkspaceError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    registry = build_tool_registry(ws, state.workspaces, state.config.shell)
+    registry = build_tool_registry(
+        ws, state.workspaces, state.config.shell, state.config.web_search, state.db
+    )
     return [
         {"name": s.name, "description": s.description}
         for s in registry.list_schemas()

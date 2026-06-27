@@ -38,3 +38,7 @@ class TaskResult:
     summary: str
     artifacts: list[str] = field(default_factory=list)
     llm_calls_used: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_seconds: float = 0.0
+    total_seconds: float = 0.0

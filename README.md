@@ -20,13 +20,27 @@ structured logging, and a CLI/API split.
 **Implemented:**
 - Config system (YAML + env overrides, fail-fast validation)
 - SQLite schema + migrations
-- Structured JSON logging + per-task LLM call budget tracking
-- Workspace sandboxing (path-containment enforced centrally, symlink-safe)
-- Tool registry + file tools (read/write/list/delete) + an `answer` tool
-  for question/explanation subtasks that don't need a file/shell action,
-  all schema-validated
+- Structured JSON logging + per-task LLM call budget **and timing**
+  tracking (`llm_seconds` vs. total wall-clock, so you can see how much
+  time is the model vs. the agent loop itself)
+- Workspace sandboxing (path-containment enforced centrally, symlink-safe),
+  and **long-term memory is correctly scoped per workspace** — it used
+  to leak across projects; fixed and covered by a regression test
+- Tool registry with 13 schema-validated tools: file (read/write/list/
+  delete), `answer` (respond in text without a file/shell action), git
+  (status/diff/log/commit/branch/stash, structured not raw-command),
+  `run_shell` (allowlist-gated, no `shell=True`, sandboxed `cwd`,
+  bounded timeout/output), and `web_search` (SearXNG, cached, capped
+  snippets)
+- Every successful tool's output is shown to the user, not just
+  `answer`'s — a silent `list_files`/`git_status` success used to look
+  like nothing happened
 - Model provider abstraction: `mock` (default, no model needed) and
-  `llama_cpp` (grammar-constrained JSON decoding)
+  `llama_cpp` (grammar-constrained JSON decoding, optional `flash_attn`
+  with graceful fallback on older bindings)
+- `indra doctor` checks whether the installed llama-cpp-python build
+  actually supports GPU offload and tells you how to fix it if not —
+  `pip install llama-cpp-python` alone is CPU-only on most platforms
 - Planner → Executor → Agent loop with bounded re-planning (the planner
   is told *why* the previous attempt failed, so re-planning picks a
   different approach instead of repeating it) and a hard `max_steps`
@@ -34,23 +48,36 @@ structured logging, and a CLI/API split.
 - Tool retries distinguish transient vs. deterministic failures
   (`ToolResult.retryable`) — a `FileNotFoundError` is not retried 3x
   with the same doomed params
-- Working/long-term memory with deterministic (non-LLM) relevance
-  scoring, deduplication, and token-budgeted retrieval
 - `RunProfile` resolution from `--thinking-level` / `--reasoning-effort`
   / `--max-steps`, plus `model.max_tokens_per_call` as a hard per-call cap
-- FastAPI app (workspaces/sessions/tasks/memory/logs) + a CLI that talks
-  to it — running `indra` with no arguments drops straight into an
-  interactive chat REPL (Claude-Code style); `indra run` remains for
-  one-shot/scripted use
-- 51 passing unit/integration tests
+- `indra serve`: standalone long-lived API process so llama.cpp loads
+  the model once, not on every CLI invocation; `api.base_url` in config
+  (or `INDRA_API_URL`) points the CLI at it
+- FastAPI app (workspaces/sessions/tasks/memory/logs/tools/info) + a CLI
+  that talks to it — running `indra` with no arguments drops straight
+  into an interactive chat REPL with a live startup banner (real tool
+  count, workspace list, and model config, not placeholders), a
+  "thinking..." spinner with elapsed time while waiting on the model
+  (see note on streaming below), and a stats footer per response
+  (calls / tokens / llm time / agent overhead / total time / tok-per-sec)
+- 118 passing unit/integration tests
+
+**On token streaming:** every model response in Indra must be valid,
+often grammar-constrained JSON (a tool call or a plan) — that's the
+core reliability mechanism for small models. Streaming raw tokens would
+mean showing a user a partially-formed JSON object, not readable
+prose, so it isn't implemented as naive token streaming. The spinner +
+per-call timing above is the practical alternative; a dedicated
+freeform-chat mode that bypasses the JSON schema for plain Q&A (trading
+some structure for true streaming) is a possible future addition, not
+yet built.
 
 **Not yet implemented** (see `PLAN.md` §19 for the full roadmap):
-repository indexing (tree-sitter symbol/import graphs), git/shell/test/
-build tools, web search tooling, Telegram bridge, hardware/model
-auto-tuning, plugin discovery wiring, patch/diff-based editing. These
-are scaffolded as empty packages where the design doc places them
-(`coding/`, `integrations/telegram/`, `plugins/`) and are the next
-slice of work.
+repository indexing (tree-sitter symbol/import graphs), test/build
+tools, Telegram bridge, hardware/model auto-tuning, plugin discovery
+wiring, patch/diff-based editing. These are scaffolded as empty
+packages where the design doc places them (`coding/`,
+`integrations/telegram/`, `plugins/`) and are the next slice of work.
 
 ## Quickstart
 

@@ -44,7 +44,7 @@ def harness(tmp_path):
 
     provider = MockProvider()
     prompts = PromptManager()
-    mem = MemoryManager(LongTermMemoryStore(db), max_tokens=300)
+    mem = MemoryManager(LongTermMemoryStore(db), workspace_id=workspace.id, max_tokens=300)
 
     runtime = AgentRuntime(
         task_manager=TaskManager(TaskRepository(db)),
@@ -202,3 +202,78 @@ def test_unparseable_plan_fails_cleanly_without_crashing(harness) -> None:
 
     assert result.status == TaskStatus.FAILED
     assert "planning failed" in result.summary
+
+
+def test_task_result_carries_token_and_timing_stats(harness) -> None:
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "answer something",
+        "subtasks": [{"description": "answer", "tool_hint": "answer"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "answer",
+        "params": {"answer": "ok"},
+        "reason": "direct answer",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "say something"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert result.prompt_tokens > 0
+    assert result.completion_tokens > 0
+    assert result.total_seconds >= 0.0
+    assert result.llm_seconds >= 0.0
+    # total wall-clock can never be less than time spent purely inside LLM calls
+    assert result.total_seconds >= result.llm_seconds
+    """Reproduces a real reported bug: a successful list_files call
+    completed the task but showed nothing to the user -- only the
+    'answer' tool's output used to be surfaced."""
+    (harness["workspace"].root_path / "a.txt").write_text("x")
+    (harness["workspace"].root_path / "b.txt").write_text("y")
+
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "list files",
+        "subtasks": [{"description": "list files", "tool_hint": "list_files"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "list_files",
+        "params": {"path": "."},
+        "reason": "show the files",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "list all the files in the workspace"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert any("a.txt" in a for a in result.artifacts)
+    assert any("b.txt" in a for a in result.artifacts)
+
+
+def test_write_file_output_surfaces_a_confirmation(harness) -> None:
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "write a file",
+        "subtasks": [{"description": "write notes.txt", "tool_hint": "write_file"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "write_file",
+        "params": {"path": "notes.txt", "content": "hello"},
+        "reason": "create it",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "write notes.txt"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert any("wrote" in a and "bytes" in a for a in result.artifacts)
