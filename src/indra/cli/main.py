@@ -78,13 +78,29 @@ def _safe_echo(text: str = "", fg: str | None = None, bold: bool = False) -> Non
         pass  # genuinely nothing we can do; don't crash the task over a print
 
 
+_TITLE_ART = (
+    r"#### ##    ## ########  ########     ###    " + "\n"
+    r" ##  ###   ## ##     ## ##     ##   ## ##   " + "\n"
+    r" ##  ####  ## ##     ## ##     ##  ##   ##  " + "\n"
+    r" ##  ## ## ## ##     ## ########  ##     ## " + "\n"
+    r" ##  ##  #### ##     ## ##   ##   ######### " + "\n"
+    r" ##  ##   ### ##     ## ##    ##  ##     ## " + "\n"
+    r"#### ##    ## ########  ##     ## ##     ## "
+)
+"""Pure-ASCII block-letter 'INDRA' (every char is '#' or space) -- no
+Unicode glyphs, no box-drawing characters. This is deliberate: a fancy
+multi-line banner is exactly the kind of output most likely to hit the
+Windows console issue described above, so it sticks to plain ASCII and
+still goes through _safe_echo line by line so a failure on one line
+can never take down startup."""
+
+_BANNER_WIDTH = 64
+
+
 def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
     """Print a startup banner built entirely from live data -- tool
     count, workspace list, and active model config -- rather than
-    decorative placeholders. ASCII-only by design: this is exactly the
-    kind of multi-line, attention-grabbing output most likely to hit
-    the Windows console issue described above, so it sticks to plain
-    characters and goes through _safe_echo line by line.
+    decorative placeholders.
     """
     try:
         info = client.get("/info").json()
@@ -107,12 +123,15 @@ def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
     elif backend == "mock":
         model_label = "mock (no model loaded)"
 
-    width = 60
-    line = "=" * width
-    _safe_echo(line)
-    _safe_echo(_center("INDRA", width))
-    _safe_echo(_center("agentic coding harness for local LLMs", width))
-    _safe_echo(line)
+    line = "+" + "-" * (_BANNER_WIDTH - 2) + "+"
+    art_pad = " " * max(0, (_BANNER_WIDTH - 44) // 2)
+
+    _safe_echo(line, fg=typer.colors.YELLOW)
+    for art_line in _TITLE_ART.split("\n"):
+        _safe_echo(art_pad + art_line, fg=typer.colors.YELLOW, bold=True)
+    _safe_echo(_center("AGENTIC HARNESS FOR LOCAL LLMS", _BANNER_WIDTH), fg=typer.colors.CYAN, bold=True)
+    _safe_echo(_center("deliberation, retrieval, and tools over raw model size", _BANNER_WIDTH))
+    _safe_echo(line, fg=typer.colors.YELLOW)
     _safe_echo(f" model      : {model_label}")
     if backend == "llama_cpp":
         gpu_note = ""
@@ -124,7 +143,7 @@ def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
     _safe_echo(f" tools ({len(tool_names)})  : {', '.join(tool_names[:6])}" + (" ..." if len(tool_names) > 6 else ""))
     if workspace_names:
         _safe_echo(f" workspaces : {', '.join(workspace_names)}")
-    _safe_echo(line)
+    _safe_echo(line, fg=typer.colors.YELLOW)
     _safe_echo("type 'exit' to quit  |  indra doctor for diagnostics")
     _safe_echo("")
 
