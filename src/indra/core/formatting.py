@@ -45,11 +45,28 @@ def format_tool_output(tool_name: str, output: Any) -> str | None:
         return str(output["output"]) or "(ok)"
     if "results" in output:
         return _format_search_results(output["results"])
+    if "matches" in output:
+        return _format_symbol_matches(output["matches"])
+    if "imports" in output:
+        imports = output["imports"]
+        return "\n".join(imports) if imports else "(none found)"
     if "bytes_written" in output:
         return f"wrote {output['bytes_written']} bytes"
     if "deleted" in output:
         return "deleted" if output["deleted"] else None
     return json.dumps(output)
+
+
+def _format_symbol_matches(matches: list[dict]) -> str:
+    if not matches:
+        return "(no matches found)"
+    lines = []
+    for m in matches:
+        lines.append(
+            f"{m.get('file_path', '?')}:{m.get('start_line', '?')} "
+            f"{m.get('symbol_kind', '')} {m.get('symbol_name', '')}"
+        )
+    return "\n".join(lines)
 
 
 def _format_search_results(results: list[dict]) -> str:

@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
+from indra.coding.dependency_graph import DependencyGraph
+from indra.coding.file_index import FileIndexer
+from indra.coding.repo_explorer import RepoExplorer
+from indra.coding.symbol_index import SymbolIndex
 from indra.config.loader import load_config
 from indra.config.schema import IndraConfig, ShellConfig, WebSearchConfig
 from indra.core.agent import AgentRuntime
@@ -37,6 +41,7 @@ from indra.tools.answer_tool import register_answer_tool
 from indra.tools.base import ToolRegistry
 from indra.tools.file_tools import register_file_tools
 from indra.tools.git_tools import register_git_tools
+from indra.tools.repo_index_tools import register_repo_index_tools
 from indra.tools.shell_tools import register_shell_tools
 from indra.tools.web_search_tools import register_web_search_tool
 from indra.workspaces.workspace_manager import Workspace, WorkspaceManager
@@ -99,7 +104,20 @@ def build_tool_registry(
     register_git_tools(registry, workspace, workspaces, timeout=shell_config.timeout_seconds)
     register_shell_tools(registry, workspace, workspaces, shell_config)
     register_web_search_tool(registry, web_search_config, SearchCacheRepository(db))
+    register_repo_index_tools(registry, workspace.id, SymbolIndex(db), DependencyGraph(db))
     return registry
+
+
+def index_and_build_repo_map(state: AppState, workspace: Workspace) -> str:
+    """Incrementally (re-)index the workspace, then return its repo map.
+
+    Cheap when nothing has changed -- file hashes are compared against
+    the last index, so an unmodified repo costs one hash per file and
+    no parsing at all. Called once per task, ahead of planning, per the
+    "search before thinking" rule.
+    """
+    FileIndexer(state.db).index_workspace(workspace.id, workspace.root_path)
+    return RepoExplorer(state.db).build_repo_map(workspace.id).map_text
 
 
 def build_agent_runtime(state: AppState, workspace: Workspace) -> AgentRuntime:

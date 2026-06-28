@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from indra.api.deps import build_agent_runtime, get_app_state
+from indra.api.deps import build_agent_runtime, get_app_state, index_and_build_repo_map
 from indra.core.run_profile import resolve_run_profile
 from indra.storage.repositories import SessionRepository, TaskRepository
 
@@ -31,8 +31,9 @@ def create_and_run_task(req: CreateTaskRequest) -> dict:
         reasoning_effort=req.reasoning_effort,
         max_steps=req.max_steps,
     )
+    repo_map = index_and_build_repo_map(state, workspace)
     runtime = build_agent_runtime(state, workspace)
-    result = runtime.run_task(task, profile)
+    result = runtime.run_task(task, profile, repo_map=repo_map)
     return {
         "task_id": result.task_id,
         "status": result.status.value,

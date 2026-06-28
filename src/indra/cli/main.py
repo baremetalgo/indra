@@ -435,6 +435,31 @@ def serve(
     )
 
 
+@app.command(name="index")
+def index_workspace(
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Workspace name."),
+) -> None:
+    """Re-index a workspace's repository (symbols, imports). Incremental:
+    unchanged files are skipped via content hash."""
+    client = get_client()
+    try:
+        ws = workspace or _default_workspace(client)
+        if ws is None:
+            _safe_echo("No workspace found.", fg=typer.colors.YELLOW)
+            return
+        with _Spinner("indexing"):
+            resp = client.post(f"/workspaces/{ws}/index")
+        resp.raise_for_status()
+        data = resp.json()
+        _safe_echo(
+            f"scanned: {data['files_scanned']}  changed: {data['files_changed']}  "
+            f"removed: {data['files_removed']}  symbols: {data['symbols_extracted']}",
+            fg=typer.colors.GREEN,
+        )
+    finally:
+        client.close()
+
+
 @tools_app.command("list")
 def tools_list(
     workspace: str = typer.Option(None, "--workspace", "-w", help="Workspace name."),

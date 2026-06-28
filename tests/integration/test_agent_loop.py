@@ -61,6 +61,7 @@ def harness(tmp_path):
         "session_id": session_id,
         "provider": provider,
         "runtime": runtime,
+        "registry": registry,
     }
 
 
@@ -277,3 +278,44 @@ def test_write_file_output_surfaces_a_confirmation(harness) -> None:
 
     assert result.status == TaskStatus.DONE
     assert any("wrote" in a and "bytes" in a for a in result.artifacts)
+
+
+def test_symbol_search_finds_a_real_indexed_function(harness) -> None:
+    """End-to-end: index a real Python file, then have the agent use
+    symbol_search (not grep/read_file) to find it."""
+    from indra.coding.dependency_graph import DependencyGraph
+    from indra.coding.file_index import FileIndexer
+    from indra.coding.symbol_index import SymbolIndex
+    from indra.tools.repo_index_tools import register_repo_index_tools
+
+    (harness["workspace"].root_path / "billing.py").write_text(
+        "def calculate_invoice_total(items):\n    return sum(items)\n"
+    )
+    FileIndexer(harness["db"]).index_workspace(
+        harness["workspace"].id, harness["workspace"].root_path
+    )
+    register_repo_index_tools(
+        harness["registry"], harness["workspace"].id,
+        SymbolIndex(harness["db"]), DependencyGraph(harness["db"]),
+    )
+
+    provider = harness["provider"]
+    provider.queue(json.dumps({
+        "goal": "find the invoice total function",
+        "subtasks": [{"description": "find it", "tool_hint": "symbol_search"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "symbol_search",
+        "params": {"query": "invoice_total"},
+        "reason": "locate the function",
+    }))
+
+    task = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "where is the invoice total calculated?"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result = harness["runtime"].run_task(task, profile)
+
+    assert result.status == TaskStatus.DONE
+    assert any("calculate_invoice_total" in a for a in result.artifacts)
+    assert any("billing.py" in a for a in result.artifacts)

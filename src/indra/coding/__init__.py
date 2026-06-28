@@ -1,8 +1,6 @@
-"""Code generation/editing, repository indexing, and AST inspection.
+"""Repository indexing (file hashing, tree-sitter symbol/import
+extraction), repo-map generation, and dependency-graph queries.
 
-Not yet implemented — scheduled for Phase 1 (indexing) and Phase 4
-(editing) of the roadmap in docs/architecture.md §19. This package
-exists now so the directory layout matches the design doc; importing
-submodules here will be the next slice of work after the core agent
-loop (this commit).
+Code generation/editing and AST-aware patching are not yet implemented
+-- scheduled for Phase 4 of the roadmap in docs/architecture.md.
 """

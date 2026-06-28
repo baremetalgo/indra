@@ -61,6 +61,14 @@ structured logging, and a CLI/API split.
   (see note on streaming below), and a stats footer per response
   (calls / tokens / llm time / agent overhead / total time / tok-per-sec)
 - 118 passing unit/integration tests
+- Repository indexing (tree-sitter, Python first): incremental file
+  hashing, function/class/method symbol extraction, import edges, all
+  scoped per workspace. A real repo map (files + top-level symbols, no
+  bodies) is built before every task and fed to the planner instead of
+  an empty string — `symbol_search`/`find_imports` tools let the agent
+  answer "where is X defined" with a SQL lookup instead of grepping
+  file by file. `indra index` for a manual re-index; runs automatically
+  on workspace creation and incrementally before every task.
 
 **On token streaming:** every model response in Indra must be valid,
 often grammar-constrained JSON (a tool call or a plan) — that's the
@@ -73,11 +81,11 @@ some structure for true streaming) is a possible future addition, not
 yet built.
 
 **Not yet implemented** (see `PLAN.md` §19 for the full roadmap):
-repository indexing (tree-sitter symbol/import graphs), test/build
-tools, Telegram bridge, hardware/model auto-tuning, plugin discovery
-wiring, patch/diff-based editing. These are scaffolded as empty
-packages where the design doc places them (`coding/`,
-`integrations/telegram/`, `plugins/`) and are the next slice of work.
+test/build tools, Telegram bridge, hardware/model auto-tuning, plugin
+discovery wiring, patch/diff-based editing, and indexing for languages
+other than Python. These are scaffolded as empty packages or single-
+language slices where the design doc places them (`coding/`,
+`integrations/telegram/`, `plugins/`) and are the next work.
 
 ## Quickstart
 
