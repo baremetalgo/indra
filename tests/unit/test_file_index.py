@@ -125,3 +125,37 @@ def test_non_code_files_are_tracked_but_not_parsed_for_symbols(tmp_path) -> None
     stats = indexer.index_workspace(workspace_id, root)
     assert stats.files_scanned == 1
     assert stats.symbols_extracted == 0
+
+
+def test_indexing_a_typescript_file_extracts_symbols(tmp_path) -> None:
+    indexer, workspace_id, root = _make_indexer(tmp_path)
+    (root / "app.ts").write_text(
+        "interface User {\n  name: string;\n}\n\n"
+        "export class UserService {\n  getUser(): User {\n    return { name: 'x' };\n  }\n}\n\n"
+        "export function createUser(): User {\n  return { name: 'y' };\n}\n"
+    )
+    stats = indexer.index_workspace(workspace_id, root)
+    assert stats.files_changed == 1
+
+    with indexer._db.connect() as conn:
+        rows = conn.execute(
+            "SELECT symbol_name, symbol_kind FROM repo_symbols WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchall()
+    kinds = {(r["symbol_name"], r["symbol_kind"]) for r in rows}
+    assert ("User", "interface") in kinds
+    assert ("UserService", "class") in kinds
+    assert ("getUser", "method") in kinds
+    assert ("createUser", "function") in kinds
+
+
+def test_indexing_a_javascript_file_extracts_imports(tmp_path) -> None:
+    indexer, workspace_id, root = _make_indexer(tmp_path)
+    (root / "app.js").write_text('import { foo } from "./bar";\n\nfunction main() {\n  foo();\n}\n')
+    indexer.index_workspace(workspace_id, root)
+
+    with indexer._db.connect() as conn:
+        rows = conn.execute(
+            "SELECT imported_path FROM repo_imports WHERE workspace_id = ?", (workspace_id,)
+        ).fetchall()
+    assert any("./bar" in r["imported_path"] for r in rows)

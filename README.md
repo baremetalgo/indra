@@ -60,15 +60,37 @@ structured logging, and a CLI/API split.
   "thinking..." spinner with elapsed time while waiting on the model
   (see note on streaming below), and a stats footer per response
   (calls / tokens / llm time / agent overhead / total time / tok-per-sec)
-- 118 passing unit/integration tests
-- Repository indexing (tree-sitter, Python first): incremental file
-  hashing, function/class/method symbol extraction, import edges, all
-  scoped per workspace. A real repo map (files + top-level symbols, no
-  bodies) is built before every task and fed to the planner instead of
-  an empty string — `symbol_search`/`find_imports` tools let the agent
-  answer "where is X defined" with a SQL lookup instead of grepping
-  file by file. `indra index` for a manual re-index; runs automatically
-  on workspace creation and incrementally before every task.
+- 160 passing unit/integration tests
+- Repository indexing (tree-sitter): incremental file hashing,
+  function/class/method/interface/type-alias symbol extraction, import
+  edges, all scoped per workspace. **Python, JavaScript, and
+  TypeScript/TSX** are wired up — adding another language is one entry
+  in a dict, not a rewrite. A real repo map (files + top-level symbols,
+  no bodies) is built before every task and fed to the planner instead
+  of an empty string — `symbol_search`/`find_imports` tools let the
+  agent answer "where is X defined" with a SQL lookup instead of
+  grepping file by file. `indra index` for a manual re-index; runs
+  automatically on workspace creation and incrementally before every task.
+- **Long-term memory no longer auto-absorbs every casual answer.** An
+  earlier version promoted every successful task's description to
+  long-term memory unconditionally; this meant an unrelated later
+  question could get derailed by injected context from a completely
+  different prior answer (reported: asking about a cricket match
+  returned "the capital of India" because a recent unrelated Q&A about
+  capital cities had been auto-memorized and recalled). Fixed by
+  removing the automatic promotion; long-term memory is now write-only
+  via explicit calls, not a transcript of every chat turn. Covered by a
+  regression test that reproduces the exact scenario.
+- `indra doctor` now also checks `web_search.base_url` reachability and
+  whether the response is actually JSON (SearXNG needs `json` enabled
+  under `search.formats` in `settings.yml`, off by default on many
+  installs) — and tells you to double-check the published port if the
+  connection is refused (a Docker container's published host port,
+  e.g. `8888:8080`, doesn't have to match the container-internal port
+  in your config).
+- Planner/executor prompts explicitly route current-events/news/score
+  questions to `web_search` rather than letting the model guess from
+  memory.
 
 **On token streaming:** every model response in Indra must be valid,
 often grammar-constrained JSON (a tool call or a plan) — that's the
@@ -83,6 +105,8 @@ yet built.
 **Not yet implemented** (see `PLAN.md` §19 for the full roadmap):
 test/build tools, Telegram bridge, hardware/model auto-tuning, plugin
 discovery wiring, patch/diff-based editing, and indexing for languages
+beyond Python/JS/TS (Go, Rust, Java, etc. -- same one-entry-per-language
+pattern, just not done yet).
 other than Python. These are scaffolded as empty packages or single-
 language slices where the design doc places them (`coding/`,
 `integrations/telegram/`, `plugins/`) and are the next work.

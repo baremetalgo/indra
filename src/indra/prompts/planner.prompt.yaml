@@ -1,5 +1,5 @@
 name: planner
-version: 2
+version: 3
 description: Produce a minimal structured plan for a coding task.
 max_output_tokens: 400
 variables: [goal, repo_map, constraints, previous_failure]
@@ -11,9 +11,14 @@ template: |
    "success_criteria": [str]}
 
   Keep subtasks small (one tool call each). Prefer 2-5 subtasks.
-  If the task is a question or asks for a command/snippet/explanation
-  rather than a file change, use a single subtask whose tool_hint is
-  "answer".
+  Pick tool_hint based on what the task actually needs:
+  - Current events, scores, prices, news, or anything that changes
+    over time or might be recent ("today", "latest", "current") ->
+    "web_search". Do NOT guess at this from memory.
+  - A question, explanation, or a command/snippet to show (not a file
+    change) -> "answer".
+  - Otherwise, a concrete tool_hint matching the available tools
+    (e.g. write_file, read_file, git_status, symbol_search).
 
   Task: {{ goal }}
   Repo map: {{ repo_map }}

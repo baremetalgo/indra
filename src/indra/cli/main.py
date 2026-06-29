@@ -666,6 +666,47 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
     else:
         _safe_echo("[ok] CLI mode: in-process (fine for the mock backend)", fg=typer.colors.GREEN)
 
+    if config.web_search.base_url:
+        import httpx
+
+        url = config.web_search.base_url.rstrip("/") + "/search"
+        try:
+            resp = httpx.get(
+                url, params={"q": "test", "format": "json"},
+                timeout=config.web_search.fetch_timeout_seconds,
+            )
+            if resp.status_code == 200:
+                try:
+                    resp.json()
+                    _safe_echo(
+                        f"[ok] web_search reachable at {config.web_search.base_url} "
+                        "(json format enabled)",
+                        fg=typer.colors.GREEN,
+                    )
+                except ValueError:
+                    _safe_echo(
+                        f"[warn] web_search at {config.web_search.base_url} responded "
+                        "but not with JSON -- if this is SearXNG, enable 'json' under "
+                        "search.formats in settings.yml and restart it.",
+                        fg=typer.colors.YELLOW,
+                    )
+            else:
+                _safe_echo(
+                    f"[warn] web_search at {config.web_search.base_url} returned "
+                    f"HTTP {resp.status_code}",
+                    fg=typer.colors.YELLOW,
+                )
+        except httpx.HTTPError as exc:
+            _safe_echo(
+                f"[warn] web_search unreachable at {config.web_search.base_url}: {exc}\n"
+                "  Check that the port in web_search.base_url matches what your "
+                "SearXNG container actually publishes (e.g. `docker ps` -- the host "
+                "port is the first number in PORTS, like 8888 in '8888:8080').",
+                fg=typer.colors.YELLOW,
+            )
+    else:
+        _safe_echo("[info] web_search.base_url not set -- web_search tool will fail", fg=typer.colors.CYAN)
+
     if not ok:
         raise typer.Exit(code=1)
     _safe_echo("indra doctor: all checks passed", fg=typer.colors.GREEN, bold=True)

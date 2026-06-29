@@ -175,12 +175,19 @@ class AgentRuntime:
         reason: str = "ok",
         artifacts: list[str] | None = None,
     ) -> TaskResult:
-        if success:
-            self.memory.promote_to_long_term(
-                content=f"Task completed: {task.description}",
-                kind="fact",
-                source_task_id=task.id,
-            )
+        # Deliberately NOT auto-promoting "Task completed: {description}"
+        # to long-term memory here. An earlier version did this
+        # unconditionally on every successful task, which meant every
+        # one-off chat answer got permanently recalled into every
+        # *unrelated* future task's context -- a tiny model handed
+        # "recent memory: capital of England is London" right before
+        # being asked an unrelated question will often just
+        # pattern-complete another "capital of X" answer instead of
+        # addressing what was actually asked. Long-term memory should
+        # hold things deliberately worth keeping (preferences,
+        # decisions, repo knowledge), not a transcript of every casual
+        # Q&A turn. There is currently no automatic promotion path;
+        # see memory.promote_to_long_term() for explicit/future use.
         status = TaskStatus.DONE if success else TaskStatus.FAILED
         self.memory.clear_working()
         return TaskResult(

@@ -170,6 +170,9 @@ def test_replan_actually_happens_with_medium_thinking_and_gets_failure_context(h
     assert result.status == TaskStatus.DONE
     assert result.artifacts == ["the file does not exist, here is an alternative"]
     assert result.llm_calls_used == 4
+
+
+def test_call_budget_is_never_exceeded(harness) -> None:
     provider = harness["provider"]
     # Plan with 5 subtasks but a budget of only 3 total calls (low thinking level).
     provider.queue(json.dumps({
@@ -230,6 +233,9 @@ def test_task_result_carries_token_and_timing_stats(harness) -> None:
     assert result.llm_seconds >= 0.0
     # total wall-clock can never be less than time spent purely inside LLM calls
     assert result.total_seconds >= result.llm_seconds
+
+
+def test_list_files_output_surfaces_as_artifact_not_just_answer(harness) -> None:
     """Reproduces a real reported bug: a successful list_files call
     completed the task but showed nothing to the user -- only the
     'answer' tool's output used to be surfaced."""
@@ -278,6 +284,46 @@ def test_write_file_output_surfaces_a_confirmation(harness) -> None:
 
     assert result.status == TaskStatus.DONE
     assert any("wrote" in a and "bytes" in a for a in result.artifacts)
+
+
+def test_unrelated_followup_question_is_not_contaminated_by_a_previous_answer(harness) -> None:
+    """Reproduces a real reported bug: asking an unrelated question after
+    a successful task returned an answer from the *previous*, completely
+    different task (a tiny model pattern-completing on injected memory
+    noise). Long-term memory must not auto-absorb every casual answer.
+    """
+    provider = harness["provider"]
+
+    # First task: a simple Q&A, completes successfully.
+    provider.queue(json.dumps({
+        "goal": "answer a geography question",
+        "subtasks": [{"description": "answer", "tool_hint": "answer"}],
+    }))
+    provider.queue(json.dumps({
+        "tool_name": "answer",
+        "params": {"answer": "The capital of England is London."},
+        "reason": "direct answer",
+    }))
+    task1 = TaskManager(TaskRepository(harness["db"])).create(
+        harness["session_id"], "What is the capital of England?"
+    )
+    profile = resolve_run_profile(AgentConfig(), thinking_level="low")
+    result1 = harness["runtime"].run_task(task1, profile)
+    assert result1.status == TaskStatus.DONE
+
+    # Nothing from that task should have been auto-persisted to long-term
+    # memory, so it can't leak into the next, unrelated task's context.
+    leftover = harness["runtime"].memory.long_term.query(workspace_id=harness["workspace"].id)
+    assert leftover == []
+
+    # Second, unrelated task: the execution context must not contain
+    # anything about England/London/capitals at all.
+    ctx = harness["runtime"].context.build_execution_context(
+        "who is playing in the cricket world cup"
+    )
+    assert "London" not in ctx
+    assert "England" not in ctx
+    assert "capital" not in ctx.lower()
 
 
 def test_symbol_search_finds_a_real_indexed_function(harness) -> None:
