@@ -17,13 +17,18 @@ class ModelConfig:
     model_path: str = ""
     context_size: int = 4096
     max_tokens_per_call: int = 512
-    gpu_layers: int = 20
+    gpu_layers: int = -1
+    """-1 means "offload all layers to GPU" (llama.cpp convention).
+    Set to 0 to force CPU-only, or a specific positive count to
+    partially offload on constrained VRAM."""
     temperature: float = 0.0
     flash_attn: bool = False
     """Passed to llama-cpp-python's Llama(flash_attn=...). Requires a
     build/GPU that supports it; silently ignored (with a logged
     warning) if the installed llama-cpp-python version doesn't accept
     the kwarg."""
+    n_threads: int | None = None
+    n_batch: int = 512
 
 
 @dataclass(frozen=True)

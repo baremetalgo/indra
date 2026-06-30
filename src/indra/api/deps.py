@@ -87,6 +87,8 @@ def build_provider(config: IndraConfig) -> ModelProvider:
             context_size=config.model.context_size,
             gpu_layers=config.model.gpu_layers,
             flash_attn=config.model.flash_attn,
+            n_threads=config.model.n_threads,
+            n_batch=config.model.n_batch,
         )
     raise ValueError(f"Unsupported backend for this build: {config.model.backend}")
 

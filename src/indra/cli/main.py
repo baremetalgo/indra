@@ -22,6 +22,10 @@ import threading
 import time
 
 import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from indra.cli.client import get_client
 
@@ -40,24 +44,39 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError, OSError):
         pass
 
+# Rich's own Console does its own careful Windows/legacy-terminal
+# detection and writes through its own buffered renderer rather than
+# Click's per-call writer, which sidesteps the issue above in most
+# cases too. force_terminal=None (the default) lets Rich auto-detect;
+# we still keep _safe_echo as the last-resort fallback for the rare
+# case where even Rich's write fails.
+_console = Console(highlight=False, soft_wrap=True)
+
 app = typer.Typer(no_args_is_help=False, add_completion=False)
 workspace_app = typer.Typer(no_args_is_help=True)
 config_app = typer.Typer(no_args_is_help=True)
 tools_app = typer.Typer(no_args_is_help=True)
+memory_app = typer.Typer(no_args_is_help=True)
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(config_app, name="config")
 app.add_typer(tools_app, name="tools")
+app.add_typer(memory_app, name="memory")
 
 def _safe_echo(text: str = "", fg: str | None = None, bold: bool = False) -> None:
     """Print ``text`` and never crash the process if the console can't.
 
-    Falls back through three I/O paths in order: Typer/Click's normal
-    echo, plain stdout, then a raw OS-level write. This exists because
-    Click's Windows Unicode console writer can hit a stale console
-    handle (ERROR_INVALID_HANDLE) after a native library has written to
-    the console — see the comment at the top of this module. A failed
-    print should never take down an otherwise-successful task result.
+    Tries Rich's Console first (its own robust Windows handling),
+    falls back through Typer/Click's echo, then plain stdout, then a
+    raw OS-level write. A failed print should never take down an
+    otherwise-successful task result -- see the comment above about
+    why Windows console writes can intermittently fail here.
     """
+    try:
+        style = (fg or "") + (" bold" if bold else "")
+        _console.print(text, style=style.strip() or None)
+        return
+    except Exception:  # noqa: BLE001 - Rich failure falls through to simpler paths
+        pass
     try:
         if fg or bold:
             typer.secho(text, fg=fg, bold=bold)
@@ -123,6 +142,51 @@ def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
     elif backend == "mock":
         model_label = "mock (no model loaded)"
 
+    try:
+        _print_rich_banner(info, tool_names, workspace_names, backend, model_label, workspace_name, thinking_level)
+    except Exception:  # noqa: BLE001 - banner must never block startup
+        _print_plain_banner(info, tool_names, workspace_names, backend, model_label, workspace_name, thinking_level)
+
+
+def _print_rich_banner(info, tool_names, workspace_names, backend, model_label, workspace_name, thinking_level) -> None:
+    title = Text("\n".join(_TITLE_ART.split("\n")), style="bold yellow", justify="center")
+    subtitle = Text("AGENTIC HARNESS FOR LOCAL LLMS", style="bold cyan", justify="center")
+    tagline = Text(
+        "deliberation, retrieval, and tools over raw model size",
+        style="dim", justify="center",
+    )
+
+    _console.print(
+        Panel(
+            Text.assemble(title, "\n", subtitle, "\n", tagline),
+            border_style="yellow",
+            padding=(1, 2),
+            width=min(_console.width, 70),
+        )
+    )
+
+    body = Table.grid(padding=(0, 1))
+    body.add_column(style="dim", justify="right")
+    body.add_column()
+    body.add_row("model", model_label)
+    if backend == "llama_cpp":
+        gpu_note = ""
+        if info.get("gpu_layers", 0) != 0:
+            gpu_note = f"  (gpu_layers={info['gpu_layers']}, flash_attn={info.get('flash_attn', False)})"
+        body.add_row("context", f"{info.get('context_size', '?')}{gpu_note}")
+    body.add_row("workspace", workspace_name)
+    body.add_row("thinking", f"{thinking_level}  (max_steps={info.get('max_steps', '?')})")
+    tool_preview = ", ".join(tool_names[:6]) + (" ..." if len(tool_names) > 6 else "")
+    body.add_row(f"tools ({len(tool_names)})", tool_preview)
+    if workspace_names:
+        body.add_row("workspaces", ", ".join(workspace_names))
+
+    _console.print(Panel(body, border_style="grey50", padding=(0, 2)))
+    _console.print("type [bold]'exit'[/bold] to quit  |  [dim]indra doctor[/dim] for diagnostics\n")
+
+
+def _print_plain_banner(info, tool_names, workspace_names, backend, model_label, workspace_name, thinking_level) -> None:
+    """ASCII/plain fallback if Rich rendering fails for any reason."""
     line = "+" + "-" * (_BANNER_WIDTH - 2) + "+"
     art_pad = " " * max(0, (_BANNER_WIDTH - 44) // 2)
 
@@ -135,7 +199,7 @@ def _print_banner(client, workspace_name: str, thinking_level: str) -> None:
     _safe_echo(f" model      : {model_label}")
     if backend == "llama_cpp":
         gpu_note = ""
-        if info.get("gpu_layers", 0) > 0:
+        if info.get("gpu_layers", 0) != 0:
             gpu_note = f"  (gpu_layers={info['gpu_layers']}, flash_attn={info.get('flash_attn', False)})"
         _safe_echo(f" context    : {info.get('context_size', '?')}{gpu_note}")
     _safe_echo(f" workspace  : {workspace_name}")
@@ -177,15 +241,57 @@ class _Spinner:
     is the honest alternative: it can't show the answer arriving
     word-by-word, but it proves the process isn't stuck and shows how
     long inference is actually taking, which was the real complaint.
+
+    Uses Rich's Status widget (a mature, purpose-built spinner with its
+    own careful terminal handling) when available, falling back to a
+    hand-rolled thread-based spinner if Rich's context manager raises
+    for any reason -- this should never be the difference between a
+    response printing or not.
     """
 
     def __init__(self, label: str = "thinking") -> None:
+        self._label = label
+        self._start = 0.0
+        self._rich_status = None
+        self._fallback: _FallbackSpinner | None = None
+
+    def __enter__(self) -> "_Spinner":
+        self._start = time.monotonic()
+        try:
+            self._rich_status = _console.status(f"[bold cyan]{self._label}...[/bold cyan]")
+            self._rich_status.__enter__()
+        except Exception:  # noqa: BLE001 - fall back to the plain-text spinner
+            self._rich_status = None
+            self._fallback = _FallbackSpinner(self._label)
+            self._fallback.__enter__()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        elapsed = time.monotonic() - self._start
+        if self._rich_status is not None:
+            try:
+                self._rich_status.__exit__(*exc)
+            except Exception:  # noqa: BLE001
+                pass
+        elif self._fallback is not None:
+            self._fallback.__exit__(*exc)
+        # Always report total elapsed time once, regardless of which
+        # spinner implementation was used -- this is the actual
+        # "where did the time go" signal, the animation is secondary.
+        _safe_echo(f"({elapsed:0.1f}s)", fg=typer.colors.CYAN)
+
+
+class _FallbackSpinner:
+    """Hand-rolled thread-based spinner, used only if Rich's Status
+    widget fails to construct or enter for some reason."""
+
+    def __init__(self, label: str) -> None:
         self._label = label
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._start = 0.0
 
-    def __enter__(self) -> "_Spinner":
+    def __enter__(self) -> "_FallbackSpinner":
         self._start = time.monotonic()
         self._thread = threading.Thread(target=self._spin, daemon=True)
         self._thread.start()
@@ -236,23 +342,42 @@ def _default_workspace(client) -> str | None:
 
 def _print_task_result(data: dict) -> None:
     for answer in data.get("artifacts", []):
-        _safe_echo(answer)
-        _safe_echo("")
-    color = typer.colors.GREEN if data["status"] == "done" else typer.colors.YELLOW
-    _safe_echo(f"[{data['status']}] {data['summary']}", fg=color)
+        try:
+            _console.print(Panel(answer, border_style="dim", padding=(0, 1)))
+        except Exception:  # noqa: BLE001
+            _safe_echo(answer)
+            _safe_echo("")
+
+    status = data["status"]
+    _safe_echo(f"[{status}] {data['summary']}", fg=("green" if status == "done" else "yellow"))
 
     completion_tokens = data.get("completion_tokens", 0)
     llm_seconds = data.get("llm_seconds", 0.0)
     total_seconds = data.get("total_seconds", 0.0)
     speed = (completion_tokens / llm_seconds) if llm_seconds > 0 else 0.0
     overhead = max(0.0, total_seconds - llm_seconds)
-    _safe_echo(
-        f"  calls: {data['llm_calls_used']}  |  "
-        f"tokens: {data.get('prompt_tokens', 0)}p/{completion_tokens}c  |  "
-        f"llm: {llm_seconds:.1f}s  |  agent overhead: {overhead:.1f}s  |  "
-        f"total: {total_seconds:.1f}s  |  speed: {speed:.1f} tok/s",
-        fg=typer.colors.CYAN,
-    )
+
+    try:
+        stats = Table.grid(padding=(0, 2))
+        for _ in range(6):
+            stats.add_column()
+        stats.add_row(
+            f"calls: {data['llm_calls_used']}",
+            f"tokens: {data.get('prompt_tokens', 0)}p/{completion_tokens}c",
+            f"llm: {llm_seconds:.1f}s",
+            f"overhead: {overhead:.1f}s",
+            f"total: {total_seconds:.1f}s",
+            f"speed: {speed:.1f} tok/s",
+        )
+        _console.print(stats, style="dim cyan")
+    except Exception:  # noqa: BLE001
+        _safe_echo(
+            f"  calls: {data['llm_calls_used']}  |  "
+            f"tokens: {data.get('prompt_tokens', 0)}p/{completion_tokens}c  |  "
+            f"llm: {llm_seconds:.1f}s  |  agent overhead: {overhead:.1f}s  |  "
+            f"total: {total_seconds:.1f}s  |  speed: {speed:.1f} tok/s",
+            fg=typer.colors.CYAN,
+        )
 
 
 @app.command()
@@ -460,6 +585,60 @@ def index_workspace(
         client.close()
 
 
+@memory_app.command("list")
+def memory_list(
+    workspace: str = typer.Option(None, "--workspace", "-w"),
+    limit: int = typer.Option(20, "--limit"),
+) -> None:
+    """List long-term memory items for a workspace."""
+    client = get_client()
+    try:
+        ws = workspace or _default_workspace(client)
+        if ws is None:
+            _safe_echo("No workspace found.", fg=typer.colors.YELLOW)
+            return
+        resp = client.get("/memory", params={"workspace": ws, "limit": limit})
+        resp.raise_for_status()
+        items = resp.json()
+        if not items:
+            _safe_echo("(no long-term memory items)")
+        for item in items:
+            _safe_echo(f"[{item['kind']}] {item['content']}  (relevance={item['relevance']:.2f})")
+    finally:
+        client.close()
+
+
+@memory_app.command("clear")
+def memory_clear(
+    workspace: str = typer.Option(None, "--workspace", "-w"),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Wipe all long-term memory for a workspace.
+
+    Useful right now if you tested an earlier version of Indra before
+    the memory-contamination fix: old "Task completed: ..." rows from
+    that version are still sitting in .indra/indra.db and will keep
+    getting recalled into unrelated tasks until cleared.
+    """
+    client = get_client()
+    try:
+        ws = workspace or _default_workspace(client)
+        if ws is None:
+            _safe_echo("No workspace found.", fg=typer.colors.YELLOW)
+            return
+        if not yes:
+            confirmed = typer.confirm(f"Clear all long-term memory for workspace '{ws}'?")
+            if not confirmed:
+                _safe_echo("cancelled")
+                return
+        resp = client.delete("/memory", params={"workspace": ws})
+        resp.raise_for_status()
+        data = resp.json()
+        _safe_echo(f"cleared {data['deleted']} memory item(s) from '{ws}'", fg=typer.colors.GREEN)
+    finally:
+        client.close()
+
+
 @tools_app.command("list")
 def tools_list(
     workspace: str = typer.Option(None, "--workspace", "-w", help="Workspace name."),
@@ -615,7 +794,31 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
                 fg=typer.colors.GREEN,
             )
 
-        if config.model.gpu_layers > 0:
+        try:
+            import llama_cpp  # noqa: F401 -- import alone triggers native lib loading
+
+            _safe_echo(
+                "[ok] llama-cpp-python native library loaded successfully",
+                fg=typer.colors.GREEN,
+            )
+        except ImportError:
+            ok = False
+            _safe_echo(
+                "[fail] llama-cpp-python is not installed. Install with: "
+                "pip install 'indra[llama-cpp]'",
+                fg=typer.colors.RED,
+            )
+        except OSError as exc:
+            ok = False
+            _safe_echo(
+                f"[fail] llama-cpp-python's native library failed to load: {exc}\n"
+                "  No inference will work (CPU or GPU) until this is fixed. Try:\n"
+                "  pip uninstall llama-cpp-python && pip install llama-cpp-python "
+                "--no-cache-dir --force-reinstall",
+                fg=typer.colors.RED,
+            )
+
+        if config.model.gpu_layers != 0:
             from indra.providers.llama_cpp_provider import gpu_offload_supported
 
             supports_gpu = gpu_offload_supported()
@@ -656,15 +859,33 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
             f"[ok] CLI mode: remote server via api.base_url={config.api.base_url}",
             fg=typer.colors.GREEN,
         )
-    elif config.model.backend == "llama_cpp":
-        _safe_echo(
-            "[warn] CLI mode: in-process (no api.base_url / INDRA_API_URL set) -- "
-            "with backend=llama_cpp this reloads the model on every command. "
-            "Run `indra serve` and set api.base_url for a much faster workflow.",
-            fg=typer.colors.YELLOW,
-        )
     else:
-        _safe_echo("[ok] CLI mode: in-process (fine for the mock backend)", fg=typer.colors.GREEN)
+        import httpx as _httpx
+
+        discovered = f"http://{config.api.host}:{config.api.port}"
+        try:
+            reachable = _httpx.get(f"{discovered}/health", timeout=0.5).status_code == 200
+        except _httpx.HTTPError:
+            reachable = False
+
+        if reachable:
+            _safe_echo(
+                f"[ok] CLI mode: auto-discovered running server at {discovered} "
+                "(no api.base_url needed)",
+                fg=typer.colors.GREEN,
+            )
+        elif config.model.backend == "llama_cpp":
+            _safe_echo(
+                f"[warn] CLI mode: in-process -- no server found at {discovered}. "
+                "Run `indra serve` in another terminal first (the CLI auto-discovers "
+                "it there); with backend=llama_cpp, running without a server reloads "
+                "the model on every command.",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            _safe_echo(
+                "[ok] CLI mode: in-process (fine for the mock backend)", fg=typer.colors.GREEN
+            )
 
     if config.web_search.base_url:
         import httpx

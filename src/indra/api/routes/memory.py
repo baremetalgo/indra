@@ -29,3 +29,23 @@ def query_memory(workspace: str, scope: str | None = None, limit: int = 50) -> l
         }
         for i in items
     ]
+
+
+@router.delete("")
+def clear_memory(workspace: str) -> dict:
+    """Wipe all long-term memory for a workspace.
+
+    Useful for clearing out rows written before the auto-promotion
+    bugfix (every old "Task completed: ..." entry from a prior version
+    of Indra is still sitting in an existing .indra/indra.db and will
+    keep getting recalled into unrelated future tasks until removed).
+    """
+    state = get_app_state()
+    try:
+        ws = state.workspaces.get(workspace)
+    except WorkspaceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    with state.db.connect() as conn:
+        cursor = conn.execute("DELETE FROM memory_items WHERE workspace_id = ?", (ws.id,))
+        deleted = cursor.rowcount
+    return {"workspace": workspace, "deleted": deleted}

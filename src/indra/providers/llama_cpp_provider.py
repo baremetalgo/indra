@@ -27,6 +27,17 @@ class LlamaCppNotInstalledError(ImportError):
     """Raised when LlamaCppProvider is used without the llama-cpp extra."""
 
 
+class LlamaCppLoadError(RuntimeError):
+    """Raised when llama-cpp-python is installed but its native library
+    (llama.dll / libllama.so / libllama.dylib) failed to load.
+
+    This is a different, more urgent problem than "no GPU offload": it
+    means *no* inference works, CPU or GPU. The most common cause on
+    Windows is a CUDA-enabled wheel whose required NVIDIA CUDA runtime
+    DLLs (cudart64_*.dll, cublas64_*.dll) aren't on PATH.
+    """
+
+
 def gpu_offload_supported() -> bool | None:
     """Best-effort check of whether the installed llama-cpp-python build
     actually supports GPU offload, independent of any model being loaded.
@@ -51,8 +62,15 @@ def gpu_offload_supported() -> bool | None:
 class LlamaCppProvider:
     model_path: str
     context_size: int = 4096
-    gpu_layers: int = 20
+    gpu_layers: int = -1
     flash_attn: bool = False
+    n_threads: int | None = None
+    """None lets llama-cpp-python pick its own default (typically CPU
+    count). Set explicitly if you suspect it's under-using your CPU."""
+    n_batch: int = 512
+    """llama.cpp's prompt-processing batch size. The library default
+    (512) is usually fine; raising it can speed up prompt ingestion on
+    GPU at the cost of more VRAM."""
 
     def __post_init__(self) -> None:
         self._llm = None  # lazy-loaded on first complete() call
@@ -68,12 +86,27 @@ class LlamaCppProvider:
                 "pip install 'indra[llama-cpp]'"
             ) from exc
 
+        _logger.info(
+            "llama_cpp_loading",
+            extra={"indra_extra": {
+                "model_path": self.model_path,
+                "n_ctx": self.context_size,
+                "n_gpu_layers": self.gpu_layers,
+                "n_batch": self.n_batch,
+                "n_threads": self.n_threads,
+                "gpu_offload_supported_by_build": gpu_offload_supported(),
+            }},
+        )
+
         base_kwargs: dict = {
             "model_path": self.model_path,
             "n_ctx": self.context_size,
             "n_gpu_layers": self.gpu_layers,
+            "n_batch": self.n_batch,
             "verbose": False,
         }
+        if self.n_threads is not None:
+            base_kwargs["n_threads"] = self.n_threads
         try:
             self._llm = Llama(**base_kwargs, flash_attn=self.flash_attn)
         except TypeError:
@@ -87,7 +120,33 @@ class LlamaCppProvider:
                                 "flash_attn=; ignoring and loading without it",
                     }},
                 )
-            self._llm = Llama(**base_kwargs)
+            try:
+                self._llm = Llama(**base_kwargs)
+            except OSError as exc:
+                raise self._actionable_load_error(exc) from exc
+        except OSError as exc:
+            # The Python package imported fine, but its native shared
+            # library (llama.dll / libllama.so) failed to load -- a
+            # different, more urgent problem than "no GPU offload": it
+            # means *no* inference works at all, CPU or GPU.
+            raise self._actionable_load_error(exc) from exc
+
+    def _actionable_load_error(self, exc: OSError) -> LlamaCppLoadError:
+        return LlamaCppLoadError(
+            f"llama-cpp-python's native library failed to load: {exc}\n"
+            "This means the Python package is installed but its compiled "
+            "backend isn't loadable -- no inference will work, CPU or GPU, "
+            "until this is fixed. Common causes on Windows:\n"
+            "  1. A CUDA-enabled wheel whose required NVIDIA CUDA runtime "
+            "DLLs (cudart64_*.dll, cublas64_*.dll) aren't on PATH -- "
+            "install the matching CUDA toolkit version, or use a wheel "
+            "that bundles its own runtime.\n"
+            "  2. A mismatched/corrupted install -- try: "
+            "pip uninstall llama-cpp-python && "
+            "pip install llama-cpp-python --no-cache-dir --force-reinstall\n"
+            "See https://github.com/abetlen/llama-cpp-python#installation "
+            "for platform-specific prebuilt wheels (including CUDA)."
+        )
 
     def complete(self, request: CompletionRequest) -> CompletionResponse:
         self._ensure_loaded()
@@ -119,7 +178,7 @@ class LlamaCppProvider:
         try:
             self._ensure_loaded()
             return True
-        except LlamaCppNotInstalledError:
+        except (LlamaCppNotInstalledError, LlamaCppLoadError):
             return False
 
 

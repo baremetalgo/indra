@@ -8,7 +8,10 @@ model:
   model_path: "D:\\llama_cpp\\models\\google_gemma-4-E2B-it-Q4_K_M.gguf"
   context_size: 32768
   max_tokens_per_call: 4096
-  gpu_layers: 40
+  gpu_layers: -1
+  # -1 means "offload all layers to GPU" (llama.cpp convention) -- the
+  # right default once GPU offload is confirmed working via `indra
+  # doctor`, rather than guessing a specific layer count.
   temperature: 0.0
   flash_attn: false
   # `indra doctor` checks whether the installed llama-cpp-python build
@@ -31,7 +34,7 @@ agent:
 
 web_search:
   provider: searxng
-  base_url: "http://localhost:8088"
+  base_url: "http://localhost:8888"
   api_key_env: ""
   max_results: 5
   fetch_timeout_seconds: 5.0

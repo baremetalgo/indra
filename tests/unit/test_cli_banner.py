@@ -20,6 +20,30 @@ def test_print_banner_does_not_raise_when_endpoints_are_unreachable() -> None:
     _print_banner(client, "demo", "medium")  # must not raise
 
 
+def test_print_banner_falls_back_to_plain_text_if_rich_rendering_fails(capsys) -> None:
+    """Even if Rich's Panel/Table rendering raises for some reason, the
+    banner must still print something useful via the plain-text path."""
+    from unittest import mock
+
+    client = mock.Mock()
+
+    def fake_get(path, **kwargs):
+        resp = mock.Mock()
+        if path == "/info":
+            resp.json.return_value = {"backend": "mock"}
+        else:
+            resp.json.return_value = []
+        return resp
+
+    client.get.side_effect = fake_get
+
+    with mock.patch("indra.cli.main._print_rich_banner", side_effect=RuntimeError("boom")):
+        _print_banner(client, "demo", "medium")
+    out = capsys.readouterr().out
+    assert "model" in out
+    assert "demo" in out
+
+
 def test_print_banner_uses_live_data(capsys) -> None:
     client = mock.Mock()
 

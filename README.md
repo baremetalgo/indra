@@ -60,7 +60,29 @@ structured logging, and a CLI/API split.
   "thinking..." spinner with elapsed time while waiting on the model
   (see note on streaming below), and a stats footer per response
   (calls / tokens / llm time / agent overhead / total time / tok-per-sec)
-- 160 passing unit/integration tests
+- 166 passing unit/integration tests
+- `indra serve` auto-discovery: run it in one terminal, then any bare
+  `indra` in another terminal finds it automatically (probes
+  `http://{api.host}:{api.port}/health`) — no need to manually set
+  `api.base_url` for the common two-terminal workflow.
+- `indra memory list` / `indra memory clear` to inspect or wipe a
+  workspace's long-term memory — useful right now if you tested an
+  earlier version before the memory-contamination fix (see further
+  down this list), since old rows from that version are still sitting
+  in `.indra/indra.db`.
+- `indra doctor` now actually attempts to load `llama_cpp`'s native
+  library (not just check the model file exists), so a failure like
+  `Could not find module 'llama.dll'` surfaces as a clear, actionable
+  diagnostic at `indra doctor` time instead of a raw OS error mid-chat.
+- `gpu_layers: -1` (offload all layers — the llama.cpp convention) is
+  now the default, instead of a guessed positive count.
+- CLI visuals upgraded with [Rich](https://github.com/Textualize/rich)
+  (already a `typer` dependency, now used directly): the startup
+  banner and per-response stats render as proper bordered panels/
+  tables instead of plain ASCII lines, and the "thinking..." spinner
+  uses Rich's mature `Status` widget. Every Rich call has a plain-text
+  fallback if rendering fails for any reason — a visual upgrade should
+  never be able to crash the CLI or swallow a successful response.
 - Repository indexing (tree-sitter): incremental file hashing,
   function/class/method/interface/type-alias symbol extraction, import
   edges, all scoped per workspace. **Python, JavaScript, and
