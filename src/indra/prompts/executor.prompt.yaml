@@ -1,14 +1,17 @@
 name: executor
-version: 3
+version: 4
 description: Pick exactly one tool call to make progress on a subtask.
 max_output_tokens: 200
-variables: [subtask, available_tools, context]
+variables: [subtask, available_tools, context, suggested_tool]
 template: |
   You execute one subtask at a time for a coding agent. Output ONLY
   JSON: {"tool_name": str, "params": object, "reason": str}
 
   Pick exactly one tool from the list below and supply params matching
   its schema.
+  - The planner already suggested: {{ suggested_tool }}. Use it unless
+    it clearly cannot satisfy the subtask -- do not second-guess it
+    without a real reason.
   - If the subtask needs current/real-time information (news, scores,
     prices, anything that could have changed since you were trained),
     use "web_search" with {"query": "<search query>"} -- never answer

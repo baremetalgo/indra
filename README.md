@@ -60,7 +60,29 @@ structured logging, and a CLI/API split.
   "thinking..." spinner with elapsed time while waiting on the model
   (see note on streaming below), and a stats footer per response
   (calls / tokens / llm time / agent overhead / total time / tok-per-sec)
-- 166 passing unit/integration tests
+- 172 passing unit/integration tests
+- **Fixed a real correctness bug: degenerate model output on the
+  llama.cpp backend.** Indra was sending raw, unformatted prompt text
+  to the model via llama-cpp-python's plain text-completion API. An
+  instruction-tuned model (e.g. Gemma) expects its own chat template
+  (`<start_of_turn>user...<end_of_turn><start_of_turn>model`); without
+  it, at `temperature: 0.0`, generation can collapse into repeating
+  unrelated prior output (reported: a later, unrelated question
+  returned the exact text of an earlier answer). Fixed by switching to
+  llama-cpp-python's `create_chat_completion()`, which applies the
+  chat template embedded in the GGUF's own metadata automatically —
+  Indra never has to know or guess a specific model's template format.
+- **Fixed a second, related gap: the planner's `tool_hint` was
+  computed but silently discarded.** The executor had to re-guess the
+  right tool from scratch on every subtask with zero benefit from the
+  planner's earlier reasoning — directly contributing to tools
+  appearing not to work. The hint is now surfaced into the executor's
+  prompt as a strong suggestion.
+- `indra doctor` now explains the "suboptimal performance due to a
+  lack of tensor cores" warning some GPUs print at model load (it
+  comes from llama.cpp itself, not Indra) and gives the exact
+  reinstall command with the right `CMAKE_CUDA_ARCHITECTURES` for your
+  card's compute capability.
 - `indra serve` auto-discovery: run it in one terminal, then any bare
   `indra` in another terminal finds it automatically (probes
   `http://{api.host}:{api.port}/health`) — no need to manually set

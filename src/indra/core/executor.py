@@ -51,11 +51,13 @@ class Executor:
         available = "; ".join(
             f"{s.name} ({s.description})" for s in self.tools.list_schemas()
         )
+        suggested = subtask.tool_hint if self.tools.has(subtask.tool_hint or "") else None
         rendered = self.prompts.render(
             "executor",
             subtask=subtask.description,
             available_tools=available,
             context=context,
+            suggested_tool=suggested or "(none)",
         )
         max_tokens = rendered.max_output_tokens
         if self.max_tokens_cap is not None:

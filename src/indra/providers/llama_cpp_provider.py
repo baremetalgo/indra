@@ -164,11 +164,26 @@ class LlamaCppProvider:
             grammar = LlamaGrammar.from_json_schema(_to_json_str(request.json_schema))
             kwargs["grammar"] = grammar
 
-        result = self._llm(request.prompt, **kwargs)  # type: ignore[misc]
+        # Use the chat-completion API, not raw text completion. Indra's
+        # prompt templates are plain instructions ("Output ONLY JSON...
+        # Task: {{goal}}") with no special tokens -- sending that
+        # straight to an instruction-tuned model via the raw completion
+        # API (Llama.__call__) means the model never sees its own
+        # expected chat formatting (e.g. Gemma's
+        # <start_of_turn>user...<end_of_turn><start_of_turn>model). At
+        # temperature=0.0 this can produce degenerate output: a real
+        # reported case was a later, unrelated question returning the
+        # exact text of an earlier answer. create_chat_completion()
+        # applies the chat template embedded in the GGUF's own metadata
+        # for us, which is the correct fix -- Indra doesn't need to
+        # know or guess any model's specific template format.
+        result = self._llm.create_chat_completion(
+            messages=[{"role": "user", "content": request.prompt}], **kwargs
+        )
         choice = result["choices"][0]
         usage = result.get("usage", {})
         return CompletionResponse(
-            text=choice["text"],
+            text=choice["message"]["content"] or "",
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
             raw=result,

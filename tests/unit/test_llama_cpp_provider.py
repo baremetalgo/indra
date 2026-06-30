@@ -110,3 +110,77 @@ def test_is_available_returns_false_on_load_error_without_raising() -> None:
     provider = LlamaCppProvider(model_path="fake.gguf")
     with mock.patch.dict("sys.modules", {"llama_cpp": fake_module}):
         assert provider.is_available() is False
+
+
+def test_complete_uses_chat_completion_api_not_raw_text_completion() -> None:
+    """The actual fix for a real reported bug: sending raw, unformatted
+    prompt text to an instruction-tuned model (no chat template
+    applied) could produce degenerate output -- a later, unrelated
+    question returned the exact text of an earlier answer. Using
+    create_chat_completion() instead makes llama-cpp-python apply the
+    model's own embedded chat template (read from the GGUF's
+    metadata), which Indra must never have to guess per-model.
+    """
+    fake_llm = mock.Mock()
+    fake_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": '{"ok": true}'}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+    fake_module = mock.Mock()
+    fake_module.Llama.return_value = fake_llm
+
+    provider = LlamaCppProvider(model_path="fake.gguf")
+    with mock.patch.dict("sys.modules", {"llama_cpp": fake_module}):
+        from indra.providers.base import CompletionRequest
+
+        response = provider.complete(CompletionRequest(prompt="do the thing", max_tokens=50))
+
+    fake_llm.create_chat_completion.assert_called_once()
+    call_kwargs = fake_llm.create_chat_completion.call_args.kwargs
+    assert call_kwargs["messages"] == [{"role": "user", "content": "do the thing"}]
+    assert response.text == '{"ok": true}'
+    assert response.prompt_tokens == 10
+    assert response.completion_tokens == 5
+    fake_llm.assert_not_called()  # the raw __call__ API must NOT be used
+
+
+def test_complete_passes_grammar_through_to_chat_completion() -> None:
+    fake_llm = mock.Mock()
+    fake_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": "{}"}}],
+        "usage": {},
+    }
+    fake_grammar = mock.Mock()
+    fake_module = mock.Mock()
+    fake_module.Llama.return_value = fake_llm
+    fake_module.LlamaGrammar.from_json_schema.return_value = fake_grammar
+
+    provider = LlamaCppProvider(model_path="fake.gguf")
+    with mock.patch.dict("sys.modules", {"llama_cpp": fake_module}):
+        from indra.providers.base import CompletionRequest
+
+        provider.complete(
+            CompletionRequest(prompt="plan this", max_tokens=50, json_schema={"type": "object"})
+        )
+
+    call_kwargs = fake_llm.create_chat_completion.call_args.kwargs
+    assert call_kwargs["grammar"] is fake_grammar
+
+
+def test_complete_handles_missing_usage_and_null_content_gracefully() -> None:
+    fake_llm = mock.Mock()
+    fake_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": None}}],
+    }
+    fake_module = mock.Mock()
+    fake_module.Llama.return_value = fake_llm
+
+    provider = LlamaCppProvider(model_path="fake.gguf")
+    with mock.patch.dict("sys.modules", {"llama_cpp": fake_module}):
+        from indra.providers.base import CompletionRequest
+
+        response = provider.complete(CompletionRequest(prompt="x", max_tokens=10))
+
+    assert response.text == ""
+    assert response.prompt_tokens == 0
+    assert response.completion_tokens == 0

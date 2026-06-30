@@ -827,6 +827,19 @@ def doctor(path: str = typer.Option("indra.config.yaml", "--path")) -> None:
                     "[ok] installed llama-cpp-python supports GPU offload",
                     fg=typer.colors.GREEN,
                 )
+                _safe_echo(
+                    "[info] if you saw 'suboptimal performance due to a lack of "
+                    "tensor cores' when the model loaded, that warning comes from "
+                    "llama.cpp itself, not Indra: your installed wheel wasn't built "
+                    "for your GPU's specific compute capability. Reinstall with the "
+                    "matching arch, e.g. for a Turing card (GTX 16xx/RTX 20xx, "
+                    "compute capability 7.5):\n"
+                    "  CMAKE_ARGS=\"-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=75\" "
+                    "pip install llama-cpp-python --force-reinstall --no-cache-dir\n"
+                    "(check your card's compute capability at "
+                    "https://developer.nvidia.com/cuda-gpus if unsure)",
+                    fg=typer.colors.CYAN,
+                )
             elif supports_gpu is False:
                 _safe_echo(
                     "[warn] installed llama-cpp-python is CPU-only -- gpu_layers "
