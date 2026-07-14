@@ -8,7 +8,16 @@ def test_answer_output() -> None:
 
 
 def test_list_files_output() -> None:
-    assert format_tool_output("list_files", {"files": ["a.txt", "b.txt"]}) == "a.txt\nb.txt"
+    result = format_tool_output("list_files", {"files": ["a.txt", "b.txt"]})
+    assert "a.txt" in result
+    assert "b.txt" in result
+
+
+def test_list_files_groups_by_directory() -> None:
+    result = format_tool_output("list_files", {"files": ["src/main.py", "src/util.py", "README.md"]})
+    assert "src/" in result
+    assert "main.py" in result
+    assert "README.md" in result
 
 
 def test_list_files_empty() -> None:

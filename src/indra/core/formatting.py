@@ -1,11 +1,4 @@
-"""Formats a tool's structured output into a short, human-readable line.
-
-Without this, a successful ``list_files`` or ``git_status`` call would
-complete the task with no visible result at all -- the user would see
-"[done] ok" and have no idea what actually happened. This was reported
-as "it fails to list files" when in fact the tool succeeded; the
-output just wasn't shown anywhere.
-"""
+"""Formats a tool's structured output into a short, human-readable string."""
 
 from __future__ import annotations
 
@@ -16,18 +9,14 @@ _MAX_CONTENT_CHARS = 4000
 
 
 def format_tool_output(tool_name: str, output: Any) -> str | None:
-    """Return a short string to show the user, or None if there's nothing
-    worth showing (e.g. a bare boolean confirmation)."""
     if output is None:
         return None
     if not isinstance(output, dict):
         return str(output)
-
     if "answer" in output:
         return str(output["answer"])
     if "files" in output:
-        files = output["files"]
-        return "\n".join(files) if files else "(no files found)"
+        return _format_file_list(output["files"])
     if "content" in output:
         return _truncate(str(output["content"]))
     if "status" in output:
@@ -57,6 +46,48 @@ def format_tool_output(tool_name: str, output: Any) -> str | None:
     return json.dumps(output)
 
 
+def _format_file_list(files: list[str]) -> str:
+    if not files:
+        return "(no files found)"
+    by_dir: dict[str, list[str]] = {}
+    for f in sorted(files):
+        normalized = f.replace("\\", "/")
+        parts = normalized.rsplit("/", 1)
+        directory = parts[0] if len(parts) > 1 else "."
+        basename = parts[-1]
+        by_dir.setdefault(directory, []).append(basename)
+    lines = []
+    for directory in sorted(by_dir):
+        if directory == ".":
+            for name in sorted(by_dir[directory]):
+                lines.append(f"  {name}")
+        else:
+            lines.append(f"  {directory}/")
+            for name in sorted(by_dir[directory]):
+                lines.append(f"    {name}")
+    return "\n".join(lines)
+
+
+def _format_search_results(results: list[dict]) -> str:
+    """Render web-search results as a Markdown table instead of raw links."""
+    if not results:
+        return "(no results found)"
+    header = "| # | Title | Source | Snippet |"
+    sep    = "|---|-------|--------|---------|"
+    rows = [header, sep]
+    for i, r in enumerate(results, 1):
+        title   = _md_cell(r.get("title", ""))
+        url     = r.get("url", "")
+        try:
+            from urllib.parse import urlparse
+            source = urlparse(url).netloc or url
+        except Exception:  # noqa: BLE001
+            source = url
+        snippet = _md_cell((r.get("snippet") or "")[:120])
+        rows.append(f"| {i} | [{title}]({url}) | {source} | {snippet} |")
+    return "\n".join(rows)
+
+
 def _format_symbol_matches(matches: list[dict]) -> str:
     if not matches:
         return "(no matches found)"
@@ -69,15 +100,8 @@ def _format_symbol_matches(matches: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _format_search_results(results: list[dict]) -> str:
-    if not results:
-        return "(no results)"
-    lines = []
-    for r in results:
-        lines.append(f"- {r.get('title', '')} ({r.get('url', '')})")
-        if r.get("snippet"):
-            lines.append(f"  {r['snippet']}")
-    return "\n".join(lines)
+def _md_cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def _truncate(text: str) -> str:

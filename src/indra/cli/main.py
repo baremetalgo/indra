@@ -349,7 +349,14 @@ def _print_task_result(data: dict) -> None:
             _safe_echo("")
 
     status = data["status"]
-    _safe_echo(f"[{status}] {data['summary']}", fg=("green" if status == "done" else "yellow"))
+    summary = data["summary"]
+    from rich.markup import escape as _rich_escape
+    color = "green" if status == "done" else "yellow"
+    try:
+        _console.print(f"[{color}][{status}][/{color}] {_rich_escape(summary)}")
+    except Exception:
+        _safe_echo(f"[{status}] {summary}",
+                   fg=(typer.colors.GREEN if status == "done" else typer.colors.YELLOW))
 
     completion_tokens = data.get("completion_tokens", 0)
     llm_seconds = data.get("llm_seconds", 0.0)
@@ -433,6 +440,14 @@ def _chat_impl(
                 break
             if not stripped:
                 continue
+
+            # Echo the user's message in cyan before the spinner so the
+            # conversation is easy to scan when llama.cpp logs land between turns.
+            try:
+                from rich.markup import escape as _re2
+                _console.print(f"[bold cyan]you:[/bold cyan] {_re2(stripped)}")
+            except Exception:
+                pass
 
             try:
                 with _Spinner("thinking"):
